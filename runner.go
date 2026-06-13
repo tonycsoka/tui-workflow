@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"fmt"
 	"os/exec"
 	"sync"
 
@@ -34,6 +33,8 @@ type stepRunner struct {
 	stepID     string
 	cancel     context.CancelFunc
 	done       chan struct{}
+	stopOnce   sync.Once
+	drained    bool
 }
 
 func newStepRunner(step Step, workflowDir string, scriptPath string, params []string) *stepRunner {
@@ -83,8 +84,10 @@ func newStepRunner(step Step, workflowDir string, scriptPath string, params []st
 			}
 			if err := scanner.Err(); err != nil {
 				select {
-				case stderrChan <- fmt.Sprintf("stdout scanner error: %v\n", err):
 				case <-done:
+					// Suppress error due to forced stop
+				default:
+					logWarning("stdout scanner error: %v", err)
 				}
 			}
 		}()
@@ -103,8 +106,10 @@ func newStepRunner(step Step, workflowDir string, scriptPath string, params []st
 			}
 			if err := scanner.Err(); err != nil {
 				select {
-				case stderrChan <- fmt.Sprintf("stderr scanner error: %v\n", err):
 				case <-done:
+					// Suppress error due to forced stop
+				default:
+					logWarning("stderr scanner error: %v", err)
 				}
 			}
 		}()
@@ -130,6 +135,8 @@ func newStepRunner(step Step, workflowDir string, scriptPath string, params []st
 		stepID:     step.ID,
 		cancel:     cancel,
 		done:       done,
+		stopOnce:   sync.Once{},
+		drained:    false,
 	}
 }
 
@@ -151,19 +158,22 @@ func (r *stepRunner) NextCmd() tea.Cmd {
 
 // Stop cancels the runner's context, killing the underlying process.
 func (r *stepRunner) Stop() {
-	if r != nil && r.cancel != nil {
+	if r == nil {
+		return
+	}
+	r.stopOnce.Do(func() {
 		r.cancel()
-	}
-	if r != nil && r.done != nil {
 		close(r.done)
-	}
+	})
 }
 
 // Drain returns any remaining output in the buffers without blocking.
+// It is safe to call multiple times; subsequent calls are no-ops.
 func (r *stepRunner) Drain() (stdout, stderr []string) {
-	if r == nil {
+	if r == nil || r.drained {
 		return nil, nil
 	}
+	r.drained = true
 	return drainChan(r.stdoutChan), drainChan(r.stderrChan)
 }
 

@@ -45,9 +45,10 @@ const (
 	paramBlockHeight   = 3 // label + input + spacing
 	modalMaxWidth      = 60
 
-	stepsPaneOverhead = 10 // titleBar(1) + footer(1) + infoPane(4, clamped to frame) + stepsPane frame(4)
-	cursorBgColor     = "236"
-	lastRunFgColor    = "244"
+	titleBarHeight = 1
+	footerHeight   = 1
+	cursorBgColor  = "236"
+	lastRunFgColor = "244"
 )
 
 // liveOutput holds the raw stdout/stderr for a step that is currently running.
@@ -359,12 +360,12 @@ func (m model) View() tea.View {
 	rightW := m.rightWidth()
 
 	leftContentW := max(2, leftW-leftPaneStyle.GetHorizontalFrameSize())
-	stepsContentH := max(stepsPaneMinHeight, m.height-stepsPaneOverhead)
-	infoContentH := 2
+	// Overhead: titleBar + footer + infoPane content + frames for both left panes
+	stepsContentH := max(stepsPaneMinHeight, m.height-titleBarHeight-footerHeight-infoPaneHeight-2*leftPaneStyle.GetVerticalFrameSize())
 
 	leftContentRaw := m.renderStepListContent(leftContentW)
 	stepsPane := leftPaneStyle.Width(leftContentW).Height(stepsContentH).Render(leftContentRaw)
-	infoPane := leftPaneStyle.Width(leftContentW).Height(infoContentH).Render(m.renderStepInfo(leftContentW))
+	infoPane := leftPaneStyle.Width(leftContentW).Height(infoPaneHeight).Render(m.renderStepInfo(leftContentW))
 	left := lipgloss.JoinVertical(lipgloss.Left, stepsPane, infoPane)
 
 	rightContentW := max(2, rightW-paneFrameH)
@@ -417,9 +418,9 @@ func (m model) Cursor() *tea.Cursor {
 	c := input.Cursor()
 	leftW := m.leftWidth()
 	// X offset: left pane width + left border of the right pane
-	c.X += leftW + 1
+	// paneStyle has a symmetric border and no padding, so the left border width is half the horizontal frame.
+	c.X += leftW + paneStyle.GetHorizontalFrameSize()/2
 	const (
-		titleBarHeight        = 1
 		paramsPaneBorderTop   = 1
 		paramsPaneTitleHeight = 1
 		paramLabelHeight      = 1

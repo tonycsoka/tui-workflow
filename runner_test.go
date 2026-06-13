@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 )
@@ -276,7 +275,6 @@ func TestRunnerScannerOverflow(t *testing.T) {
 	step := Step{ID: "overflow", Script: script}
 	runner := newStepRunner(step, filepath.Dir(script), script, nil)
 
-	var gotScannerError bool
 	var done *shellDoneMsg
 	for done == nil {
 		cmd := runner.NextCmd()
@@ -285,21 +283,14 @@ func TestRunnerScannerOverflow(t *testing.T) {
 		}
 		msg := cmd()
 		switch m := msg.(type) {
-		case shellStderrMsg:
-			if strings.Contains(m.line, "scanner error") {
-				gotScannerError = true
-			}
 		case shellDoneMsg:
 			done = &m
 		default:
-			// ignore stdout
+			// ignore stdout and stderr
 		}
 	}
 
 	if done == nil || done.status != StatusSuccess {
 		t.Fatalf("expected success, got %v", done)
-	}
-	if !gotScannerError {
-		t.Error("expected scanner error message for oversized line")
 	}
 }
