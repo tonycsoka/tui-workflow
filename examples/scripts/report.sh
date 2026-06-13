@@ -23,7 +23,7 @@ triggers glamour rendering with a dark theme.
 |-----------|---------|--------|
 | Database  | ✅ Up   | 99.9%  |
 | API       | ✅ Up   | 99.8%  |
-| Worker    | ⚠️ Slow | 95.2%  |
+| Worker    | 🐌 Slow | 95.2%  |
 | Cache     | ✅ Up   | 99.9%  |
 
 ## Code Example
