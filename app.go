@@ -33,6 +33,10 @@ var (
 	paramUnusedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	titleStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")).Background(lipgloss.Color("235")).Padding(0, 1)
 	sessionStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Background(lipgloss.Color("235")).Padding(0, 1)
+
+	// Tab styles
+	tabActiveStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("250")).Background(lipgloss.Color("235")).Padding(0, 1)
+	tabInactiveStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Padding(0, 1)
 )
 
 // Layout constants for the TUI.
@@ -93,6 +97,8 @@ type model struct {
 	autoRun     bool   // chain auto-run mode active
 	savePending bool   // debounce flag for autoSave
 	saveErr     string // transient error from autoSave
+
+	outputTab int // 0 = stdout, 1 = stderr
 }
 
 func initialModel(wf *Workflow, session *Session, workflowDir string) model {
@@ -104,12 +110,14 @@ func initialModel(wf *Workflow, session *Session, workflowDir string) model {
 		paramNames:   make([]string, 0, len(wf.Parameters)),
 		focusedParam: -1,
 		liveOutputs:  make(map[string]*liveOutput),
+		outputTab:    0,
 	}
 	for name := range wf.Parameters {
 		m.paramNames = append(m.paramNames, name)
 	}
 	sort.Strings(m.paramNames)
 	m.updateParamInputs()
+	m.loadStepOutput()
 	return m
 }
 
@@ -320,6 +328,18 @@ func (m model) handleKeyMsg(msg tea.KeyMsg) (model, tea.Cmd) {
 			m.focusedParam = 0
 			return m, m.blurAllExcept(0)
 		}
+	case "left":
+		m.outputTab--
+		if m.outputTab < 0 {
+			m.outputTab = 1
+		}
+		m.loadStepOutput()
+	case "right":
+		m.outputTab++
+		if m.outputTab > 1 {
+			m.outputTab = 0
+		}
+		m.loadStepOutput()
 	case "r":
 		if m.canRun() {
 			return m, m.runCurrentStep()
@@ -397,34 +417,42 @@ func (m model) View() tea.View {
 
 	rightContentW := max(2, rightW-paneFrameH)
 	paramsContent := m.renderParamContent(rightContentW)
-	stderrContent := m.stderrViewport.View()
-
-	// For markdown output, bypass the viewport's broken MaxWidth truncation
-	// and the pane's Width wrapping (both are not ANSI-aware in lipgloss).
-	// Glamour already wraps at the correct width, so we render directly.
-	var stdoutContent string
-	if m.workflow != nil && m.cursor < len(m.workflow.Steps) && m.workflow.Steps[m.cursor].OutputType == OutputMarkdown && m.stdoutViewport.GetContent() != "" {
-		stdoutContent = m.renderViewportContent()
-	} else {
-		stdoutContent = m.stdoutViewport.View()
-	}
 
 	params := paneStyle.Width(rightW).Render(
 		paneTitleStyle.Render("Parameters") + "\n" + paramsContent)
-	stdout := paneStyle.Width(rightW).Render(
-		paneTitleStyle.Render("Stdout") + "\n" + stdoutContent)
-	stderr := paneStyle.Width(rightW).Render(
-		paneTitleStyle.Render("Stderr") + "\n" + stderrContent)
 
-	right := lipgloss.JoinVertical(lipgloss.Left, params, stdout, stderr)
+	tabBar := m.renderOutputTabs()
+	var outputContent string
+	if m.outputTab == 0 {
+		// For markdown output, bypass the viewport's broken MaxWidth truncation
+		// and the pane's Width wrapping (both are not ANSI-aware in lipgloss).
+		// Glamour already wraps at the correct width, so we render directly.
+		if m.workflow != nil && m.cursor < len(m.workflow.Steps) && m.workflow.Steps[m.cursor].OutputType == OutputMarkdown && m.stdoutViewport.GetContent() != "" {
+			outputContent = m.renderViewportContent()
+		} else {
+			outputContent = m.stdoutViewport.View()
+		}
+	} else {
+		outputContent = m.stderrViewport.View()
+	}
+
+	output := paneStyle.Width(rightW).Render(
+		tabBar + "\n" + outputContent)
+
+	right := lipgloss.JoinVertical(lipgloss.Left, params, output)
 
 	// Render title bar
 	titleBar := m.renderTitle()
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-	footer := lipgloss.NewStyle().Height(1).Render(
-		"↑/↓ nav  r run  R auto-run  d skip  tab params  s sessions  pgup/pgdn scroll  q quit",
-	)
+	var footerText string
+	if m.allParamsSet() {
+		footerText = "↑/↓ nav  ←/→ tabs  r run  R auto-run  d skip  tab params  s sessions  pgup/pgdn scroll  q quit"
+	} else {
+		warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
+		footerText = "↑/↓ nav  ←/→ tabs  d skip  tab params  s sessions  pgup/pgdn scroll  q quit  " + warnStyle.Render("⚠ set all parameters to run")
+	}
+	footer := lipgloss.NewStyle().Height(1).Render(footerText)
 
 	all := lipgloss.JoinVertical(lipgloss.Left, titleBar, body, footer)
 	v := tea.NewView(all)
@@ -488,22 +516,15 @@ func (m *model) resizeViewports() {
 		paramLines = 1
 	}
 	paramPaneContent := paramLines + 1 // +1 for title line
-	// Overhead: 3 pane borders + 2 title lines for stdout/stderr + title bar
+	// Overhead: 2 pane borders (params + output) + 1 tab bar line
 	// (the params title is already counted in paramPaneContent)
-	totalOverhead := 3*paneFrameV + 2
+	totalOverhead := 2*paneFrameV + 1
 	remaining := m.height - 2 - paramPaneContent - totalOverhead
 
-	var stdoutVH, stderrVH int
-	if remaining < 6 {
-		stdoutVH = 3
-		stderrVH = 3
-	} else {
-		stdoutVH = max(3, remaining/2)
-		stderrVH = max(3, remaining-stdoutVH)
-	}
+	outputVH := max(3, remaining)
 
-	m.stdoutViewport = viewport.New(viewport.WithWidth(viewportW), viewport.WithHeight(stdoutVH))
-	m.stderrViewport = viewport.New(viewport.WithWidth(viewportW), viewport.WithHeight(stderrVH))
+	m.stdoutViewport = viewport.New(viewport.WithWidth(viewportW), viewport.WithHeight(outputVH))
+	m.stderrViewport = viewport.New(viewport.WithWidth(viewportW), viewport.WithHeight(outputVH))
 
 	// If the current step is markdown, re-render with new width
 	m.refreshStdoutContent()
@@ -644,6 +665,17 @@ func (m model) runTypeIcon(step Step) string {
 		return "⊘"
 	}
 	return "↻"
+}
+
+func (m model) renderOutputTabs() string {
+	stdoutStyle := tabInactiveStyle
+	stderrStyle := tabInactiveStyle
+	if m.outputTab == 0 {
+		stdoutStyle = tabActiveStyle
+	} else {
+		stderrStyle = tabActiveStyle
+	}
+	return stdoutStyle.Render("Stdout") + " " + stderrStyle.Render("Stderr")
 }
 
 func (m model) renderParamContent(w int) string {
@@ -942,8 +974,23 @@ func (m model) renderTitle() string {
 	return lipgloss.NewStyle().Width(m.width).Render(title)
 }
 
+func (m model) allParamsSet() bool {
+	if m.workflow == nil || m.session == nil {
+		return true
+	}
+	for name := range m.workflow.Parameters {
+		if m.session.GetParameterValue(name, m.workflow) == "" {
+			return false
+		}
+	}
+	return true
+}
+
 func (m model) canRun() bool {
 	if m.workflow == nil || m.session == nil {
+		return false
+	}
+	if !m.allParamsSet() {
 		return false
 	}
 	return m.session.IsStepRunnable(m.workflow, m.cursor)

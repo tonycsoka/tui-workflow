@@ -1,53 +1,55 @@
-# Plan: Add Auto-Run Step Configuration
+# Plan: Tabbed Stdout/Stderr and Parameter Validation
 
 ## Context
 
-Add an optional `auto_run` boolean field to workflow steps (default `false`). When a user starts a task with uppercase `"R"` (not lowercase `"r"`), the selected task runs, and then the TUI automatically chains through any subsequent tasks that have `auto_run=true`, stopping when it encounters a task with `auto_run=false` (or the end of the workflow).
+The `tui-workflow` app currently renders three vertical panes on the right side:
+1. Parameters
+2. Stdout  
+3. Stderr
 
-## Open Questions
+This splits the available vertical space, making it hard to see full output. The user wants:
+1. **Tabbed stdout/stderr panes** — so they share the same vertical space and can be switched between, giving more room to whichever is active.
+2. **Block runs if any parameter is not set** — prevent a step from running when a required parameter is empty/unset.
 
-1. **Cursor behavior during auto-run chain**: Should the cursor move down to each auto-running step so the user sees its live output, or should the cursor stay on the original step? *Recommended: move cursor.*
-2. **Visual indicator for auto-run steps**: Should the step list show an indicator (e.g., `⏵` or `▶`) for steps that have `auto_run=true`? *Recommended: add an icon, similar to the existing `run_once_per_session` `⊘` icon.*
-3. **Chain stop conditions**: The spec says stop when `auto_run=false`. Should the chain also stop if a step fails, or if a step is not runnable (e.g., `run_once_per_session` already succeeded)? *Recommended: yes, stop on failure or non-runnable.*
-4. **Footer help text**: Should we update the footer to show `R` as a new key binding? *Recommended: yes, e.g., `r run  R auto-run`.*
+## Approach
 
-## Proposed Approach
+### Tabbed stdout/stderr
 
-1. **Data model** (`workflow.go`): Add `AutoRun bool` to `Step` with JSON tag `auto_run,omitempty`.
-2. **UI model** (`app.go`): Add `autoRun bool` to `model` to track whether an auto-run chain is active.
-3. **Key handling** (`app.go`): Add `case "R":` (works in Bubble Tea v2 because `msg.String()` returns `"R"` for Shift+R). Set `autoRun=true` and call `runCurrentStep()`, but only if `canRun()`.
-4. **Chain logic** (`app.go` `shellDoneMsg` handler): After a step finishes, if `autoRun` is active and the step succeeded, look at the next step. If it exists, has `auto_run=true`, and is runnable, advance `cursor`, call `loadStepOutput()`, and return `runCurrentStep()`. Otherwise, set `autoRun=false`.
-5. **Icons** (`app.go`): Update `runTypeIcon` or add a new indicator for auto-run steps.
-6. **Footer** (`app.go` `View`): Update the footer help text to mention `R`.
-7. **Tests**: Add tests for `auto_run` JSON loading and auto-run chain behavior.
+- Replace the two separate stdout/stderr vertical panes with a single **output pane** that has a tab bar at the top (`Stdout | Stderr`).
+- Add an `outputTab` field to the model (`0` = stdout, `1` = stderr).
+- Use **left/right arrow keys** to switch tabs when not editing parameters. Wrap around at the edges.
+- Give both viewports the full available height (no longer split 50/50). Only the active tab's viewport content is rendered in the output pane.
+- Call `loadStepOutput()` after switching tabs so the newly visible viewport is refreshed from the live buffer.
 
-## Files to modify
+### Parameter validation
 
-- `workflow.go` — add `AutoRun` field
-- `app.go` — add `autoRun` flag, handle `R` key, chain logic in `shellDoneMsg`, icon, footer
-- `app_test.go` — add tests for auto-run behavior
-- `examples/` — optionally update an example to demonstrate `auto_run`
+- A parameter is "not set" if `GetParameterValue(name, wf)` returns an empty string — meaning **no user value and no default**.
+- Add `allParamsSet()` to check every parameter in the workflow has a non-empty resolved value.
+- Add `allParamsSet()` to `canRun()` so `r` and `R` are **completely blocked** for all steps until every workflow parameter is set.
+- The footer will show `⚠ set all parameters to run` in place of the `r run  R auto-run` hint when parameters are missing.
 
-## Reuse
+## Files to Modify
 
-- `m.canRun()` — already checks `IsStepRunnable` and current step state
-- `m.runCurrentStep()` — already validates script, sets up runner, returns command
-- `m.loadStepOutput()` — already loads buffers and refreshes viewport
-- `IsStepRunnable` in `session.go` — already enforces sequence + run-once rules
-- `runTypeIcon` in `app.go` — pattern for step-type icons
+- `app.go` — add `outputTab`, tab rendering, `allParamsSet()`, `canRun()` update, `resizeViewports()` refactor, left/right key handling
+- `app_test.go` — add tab-switching tests and parameter-gating tests
 
 ## Steps
 
-- [ ] 1. Add `AutoRun` to `Step` struct in `workflow.go`
-- [ ] 2. Add `autoRun bool` to `model` struct in `app.go`
-- [ ] 3. Handle `case "R"` in `handleKeyMsg` (set flag, call `runCurrentStep` if `canRun`)
-- [ ] 4. Extend `shellDoneMsg` handler to chain to next auto-run step
-- [ ] 5. Add auto-run visual indicator in step list
-- [ ] 6. Update footer help text
-- [ ] 7. Add tests for JSON loading and auto-run chain
-- [ ] 8. Update example workflow to showcase `auto_run`
+- [ ] Add `outputTab` field to `model` and `initialModel`
+- [ ] Add `renderOutputTabs()` with active/inactive styles
+- [ ] Refactor `View()` to render params pane + single output pane with tab bar
+- [ ] Refactor `resizeViewports()` to allocate full remaining height to both viewports
+- [ ] Add left/right arrow handling in `handleKeyMsg()` (wrap around, call `loadStepOutput()`)
+- [ ] Add `allParamsSet()` method on `model`
+- [ ] Update `canRun()` to require `allParamsSet()`
+- [ ] Update footer rendering to warn when parameters are missing
+- [ ] Add tests for tab switching and parameter validation gating
 
 ## Verification
 
-- `go test -v` passes
-- Manual test: run `examples/full-demo.json` with `R` on a step, observe chain behavior
+- `go test ./...` should pass
+- Run `go run . examples/deploy.json` and verify:
+  - Left/right arrows switch between stdout and stderr tabs
+  - Both tabs show current output when switching while a step is running
+  - `r` and `R` are blocked when any parameter without a default is empty
+  - Footer shows the parameter warning when a parameter is missing

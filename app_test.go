@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestLoadWorkflow(t *testing.T) {
@@ -482,6 +484,166 @@ func TestAutoRunChainStopsOnFailure(t *testing.T) {
 	}
 	if newM.currentStepID != "" {
 		t.Errorf("Expected currentStepID=\"\", got %s", newM.currentStepID)
+	}
+}
+
+func TestTabSwitching(t *testing.T) {
+	wf := Workflow{
+		Name: "test",
+		Steps: []Step{
+			{ID: "s1", Name: "Step 1", Script: "foo.sh"},
+		},
+	}
+	sess := NewSession(&wf, ".")
+	m := initialModel(&wf, sess, ".")
+	m.width = 100
+	m.height = 30
+	m.resizeViewports()
+
+	// Right arrow switches to stderr
+	newM, _ := m.handleKeyMsg(tea.KeyPressMsg{Code: tea.KeyRight})
+	if newM.outputTab != 1 {
+		t.Errorf("Expected outputTab=1 after right arrow, got %d", newM.outputTab)
+	}
+
+	// Right arrow wraps to stdout
+	newM, _ = newM.handleKeyMsg(tea.KeyPressMsg{Code: tea.KeyRight})
+	if newM.outputTab != 0 {
+		t.Errorf("Expected outputTab=0 after wrapping right arrow, got %d", newM.outputTab)
+	}
+
+	// Left arrow switches to stderr
+	newM, _ = newM.handleKeyMsg(tea.KeyPressMsg{Code: tea.KeyLeft})
+	if newM.outputTab != 1 {
+		t.Errorf("Expected outputTab=1 after left arrow, got %d", newM.outputTab)
+	}
+
+	// Left arrow wraps to stdout
+	newM, _ = newM.handleKeyMsg(tea.KeyPressMsg{Code: tea.KeyLeft})
+	if newM.outputTab != 0 {
+		t.Errorf("Expected outputTab=0 after wrapping left arrow, got %d", newM.outputTab)
+	}
+}
+
+func TestAllParamsSet(t *testing.T) {
+	wf := Workflow{
+		Name: "test",
+		Parameters: map[string]Parameter{
+			"required": {Type: ParamString, Description: "Required param"},
+			"optional": {Type: ParamString, Default: "default"},
+		},
+		Steps: []Step{
+			{ID: "s1", Name: "Step 1", Script: "foo.sh"},
+		},
+	}
+	sess := NewSession(&wf, ".")
+	m := initialModel(&wf, sess, ".")
+
+	if m.allParamsSet() {
+		t.Error("allParamsSet should be false when required parameter is not set")
+	}
+
+	// Set required parameter via session
+	sess.SetParameterValue("required", "value")
+	m.updateParamInputs()
+
+	if !m.allParamsSet() {
+		t.Error("allParamsSet should be true after setting required parameter")
+	}
+
+	// Optional parameter with default is already set
+	// If we explicitly set it to empty, it should still be considered set
+	// because GetParameterValue returns the default.
+	// If we clear the default by setting it to empty string, the value is empty
+	// but GetParameterValue will return the default. So allParamsSet is about
+	// the final resolved value, not whether the user typed something.
+	sess.SetParameterValue("required", "")
+	m.updateParamInputs()
+
+	if m.allParamsSet() {
+		t.Error("allParamsSet should be false when required parameter is empty and has no default")
+	}
+}
+
+func TestCanRunBlockedByMissingParams(t *testing.T) {
+	wf := Workflow{
+		Name: "test",
+		Parameters: map[string]Parameter{
+			"required": {Type: ParamString, Description: "Required param"},
+		},
+		Steps: []Step{
+			{ID: "s1", Name: "Step 1", Script: "foo.sh"},
+		},
+	}
+	sess := NewSession(&wf, ".")
+	m := initialModel(&wf, sess, ".")
+	m.width = 100
+	m.height = 30
+	m.resizeViewports()
+
+	if m.canRun() {
+		t.Error("canRun should be false when required parameter is missing")
+	}
+
+	// Set required parameter
+	sess.SetParameterValue("required", "value")
+	m.updateParamInputs()
+
+	if !m.canRun() {
+		t.Error("canRun should be true after setting required parameter")
+	}
+}
+
+func TestFooterWarnsMissingParams(t *testing.T) {
+	wf := Workflow{
+		Name: "test",
+		Parameters: map[string]Parameter{
+			"required": {Type: ParamString, Description: "Required param"},
+		},
+		Steps: []Step{
+			{ID: "s1", Name: "Step 1", Script: "foo.sh"},
+		},
+	}
+	sess := NewSession(&wf, ".")
+	m := initialModel(&wf, sess, ".")
+	m.width = 100
+	m.height = 30
+	m.resizeViewports()
+
+	view := m.View()
+	if !strings.Contains(view.Content, "set all parameters to run") {
+		t.Errorf("Footer should warn about missing parameters, got:\n%s", view.Content)
+	}
+
+	// Set required parameter
+	sess.SetParameterValue("required", "value")
+	m.updateParamInputs()
+	view = m.View()
+	if strings.Contains(view.Content, "set all parameters to run") {
+		t.Errorf("Footer should not warn after setting parameters, got:\n%s", view.Content)
+	}
+}
+
+func TestInitialModelLoadsStepOutput(t *testing.T) {
+	wf := Workflow{
+		Name: "test",
+		Steps: []Step{
+			{ID: "s1", Name: "Step 1", Script: "foo.sh"},
+		},
+	}
+	sess := NewSession(&wf, ".")
+	sess.UpdateStepState("s1", StepState{
+		Status: StatusSuccess,
+		Stdout: "hello stdout",
+		Stderr: "hello stderr",
+	})
+
+	m := initialModel(&wf, sess, ".")
+	if string(m.stdoutBuffer) != "hello stdout" {
+		t.Errorf("Expected stdoutBuffer to be loaded on init, got %q", string(m.stdoutBuffer))
+	}
+	if string(m.stderrBuffer) != "hello stderr" {
+		t.Errorf("Expected stderrBuffer to be loaded on init, got %q", string(m.stderrBuffer))
 	}
 }
 

@@ -4,12 +4,10 @@
   "parameters": {
     "env": {
       "type": "string",
-      "default": "dev",
       "description": "Target environment"
     },
     "verbose": {
       "type": "string",
-      "default": "true",
       "description": "Enable verbose output"
     }
   },
@@ -41,7 +39,10 @@
       "id": "deploy",
       "name": "Deploy",
       "script": "scripts/deploy.sh",
-      "params": ["env", "verbose"],
+      "params": [
+        "env",
+        "verbose"
+      ],
       "description": "Uses parameters and depends on previous steps",
       "run_once_per_session": true,
       "auto_run": true
@@ -55,3 +56,4 @@
     }
   ]
 }
+
