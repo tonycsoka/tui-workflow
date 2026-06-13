@@ -12,7 +12,7 @@ A JSON-driven terminal UI for running sequenced, parameterised shell workflows.
 - **Session persistence**: Auto-saved, directory-aware sessions with unique datetime-based names. Resume or switch between sessions.
 - **Live output**: Stream stdout/stderr from scripts in real-time.
 - **Markdown output**: Steps can render their output as styled markdown via glamour.
-- **Run-type indicators**: Steps show icons indicating whether they're repeatable (↻) or run-once (⊘).
+- **Run-type indicators**: Steps show icons indicating whether they're repeatable (↻), run-once (⊘), or auto-run (⏵).
 - **Step info pane**: Shows description and last run time for the selected step.
 
 ## Installation
@@ -20,7 +20,7 @@ A JSON-driven terminal UI for running sequenced, parameterised shell workflows.
 ### From GitHub (latest)
 
 ```bash
-go install github.com/yourusername/tui-workflow@latest
+go install github.com/tonycsoka/tui-workflow@latest
 ```
 
 Then run it directly:
@@ -32,7 +32,7 @@ tui-workflow <workflow.json>
 ### From source
 
 ```bash
-git clone https://github.com/yourusername/tui-workflow.git
+git clone https://github.com/tonycsoka/tui-workflow.git
 cd tui-workflow
 go build .
 ```
@@ -103,6 +103,7 @@ A comprehensive demo showing all features:
   - `script`: Path to shell script (relative to workflow JSON or absolute).
   - `params`: Array of parameter names to pass as positional arguments to the script.
   - `run_once_per_session`: If `true`, the step is skipped if it already succeeded in the current session.
+  - `auto_run`: If `true`, the step is automatically executed as part of an auto-run chain triggered by pressing `R`.
   - `output_type`: Set to `"markdown"` to render the step's stdout as styled markdown.
   - `description`: Description shown in the step info pane.
 
@@ -115,6 +116,7 @@ A comprehensive demo showing all features:
 | `Shift+Tab` | Previous parameter input |
 | `Esc` | Unfocus parameters / close modals |
 | `r` | Run selected step |
+| `R` | Run selected step and auto-run subsequent `auto_run` steps |
 | `d` | Skip step (with confirmation) |
 | `s` | Show session picker |
 | `PgUp` / `PgDown` | Scroll stdout pane |
@@ -172,7 +174,7 @@ The output is rendered via glamour with a dark theme. Use `PgUp`/`PgDown` to scr
 In the step list, each step shows two icons:
 
 - **Status icon**: `○` pending, `●` running, `✓` done, `✗` failed, `⊘` skipped
-- **Run-type icon**: `↻` repeatable, `⊘` run-once per session
+- **Run-type icon**: `↻` repeatable, `⊘` run-once per session, `⏵` auto-run step
 
 ## Development
 
