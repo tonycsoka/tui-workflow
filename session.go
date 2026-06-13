@@ -30,6 +30,8 @@ type StepState struct {
 	RunAt    string     `json:"run_at,omitempty"`
 	// Output is deprecated. Use Stdout and Stderr instead.
 	// Kept for backward compatibility with sessions created before the split.
+	//
+	// Deprecated: Use Stdout and Stderr instead.
 	Output   string     `json:"output,omitempty"`
 	Stdout   string     `json:"stdout,omitempty"`
 	Stderr   string     `json:"stderr,omitempty"`
@@ -102,17 +104,7 @@ func SessionPath(workflowName, cwd, sessionName string) string {
 	return filepath.Join(SessionDir(), cwdHash(cwd), workflowName, sessionName+".json")
 }
 
-// LoadSessionByName reads a specific named session from disk.
-func LoadSessionByName(workflowName, cwd, sessionName string) (*Session, error) {
-	path := SessionPath(workflowName, cwd, sessionName)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("reading session file: %w", err)
-	}
-
+func parseSession(data []byte) (*Session, error) {
 	var sess Session
 	if err := json.Unmarshal(data, &sess); err != nil {
 		return nil, fmt.Errorf("parsing session JSON: %w", err)
@@ -126,6 +118,19 @@ func LoadSessionByName(workflowName, cwd, sessionName string) (*Session, error) 
 	return &sess, nil
 }
 
+// LoadSessionByName reads a specific named session from disk.
+func LoadSessionByName(workflowName, cwd, sessionName string) (*Session, error) {
+	path := SessionPath(workflowName, cwd, sessionName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading session file: %w", err)
+	}
+	return parseSession(data)
+}
+
 // LoadSessionFromPath reads a session from a given file path.
 func LoadSessionFromPath(path string) (*Session, error) {
 	data, err := os.ReadFile(path)
@@ -135,18 +140,7 @@ func LoadSessionFromPath(path string) (*Session, error) {
 		}
 		return nil, fmt.Errorf("reading session file: %w", err)
 	}
-
-	var sess Session
-	if err := json.Unmarshal(data, &sess); err != nil {
-		return nil, fmt.Errorf("parsing session JSON: %w", err)
-	}
-	if sess.StepStates == nil {
-		sess.StepStates = make(map[string]StepState)
-	}
-	if sess.ParameterValues == nil {
-		sess.ParameterValues = make(map[string]string)
-	}
-	return &sess, nil
+	return parseSession(data)
 }
 
 // SaveSession writes the session to disk, creating directories if needed.
@@ -240,7 +234,7 @@ func (sess *Session) OverallStatus() string {
 	return "in progress"
 }
 
-// UpdateStepState updates a step's state and auto-saves the session.
+// UpdateStepState updates a step's state and sets its run timestamp.
 func (sess *Session) UpdateStepState(stepID string, state StepState) {
 	if sess.StepStates == nil {
 		sess.StepStates = make(map[string]StepState)
@@ -249,7 +243,7 @@ func (sess *Session) UpdateStepState(stepID string, state StepState) {
 	sess.StepStates[stepID] = state
 }
 
-// SetParameterValue sets a parameter value and auto-saves.
+// SetParameterValue sets a parameter value.
 func (sess *Session) SetParameterValue(key, value string) {
 	if sess.ParameterValues == nil {
 		sess.ParameterValues = make(map[string]string)

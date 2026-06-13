@@ -45,7 +45,7 @@ const (
 	paramBlockHeight   = 3 // label + input + spacing
 	modalMaxWidth      = 60
 
-	stepsPaneOverhead = 10 // titleBar + footer + borders + padding rough estimate
+	stepsPaneOverhead = 10 // titleBar(1) + footer(1) + infoPane(4, clamped to frame) + stepsPane frame(4)
 	cursorBgColor     = "236"
 	lastRunFgColor    = "244"
 )
@@ -130,37 +130,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateParamInputWidths()
 
 	case shellStdoutMsg:
-		if m.currentStepID == msg.stepID {
-			liveOut := m.liveOutputs[msg.stepID]
-			if liveOut == nil {
-				liveOut = &liveOutput{}
-				m.liveOutputs[msg.stepID] = liveOut
-			}
-			liveOut.stdout = append(liveOut.stdout, msg.line...)
-			if m.workflow != nil && m.cursor < len(m.workflow.Steps) && m.workflow.Steps[m.cursor].ID == msg.stepID {
-				m.stdoutBuffer = liveOut.stdout
-				m.stdoutViewport.SetContent(string(m.stdoutBuffer))
-				m.stdoutViewport.GotoBottom()
-			}
-		}
+		m.handleLiveOutput(msg.stepID, msg.line, true)
 		if m.runner != nil {
 			return m, m.runner.NextCmd()
 		}
 
 	case shellStderrMsg:
-		if m.currentStepID == msg.stepID {
-			liveOut := m.liveOutputs[msg.stepID]
-			if liveOut == nil {
-				liveOut = &liveOutput{}
-				m.liveOutputs[msg.stepID] = liveOut
-			}
-			liveOut.stderr = append(liveOut.stderr, msg.line...)
-			if m.workflow != nil && m.cursor < len(m.workflow.Steps) && m.workflow.Steps[m.cursor].ID == msg.stepID {
-				m.stderrBuffer = liveOut.stderr
-				m.stderrViewport.SetContent(string(m.stderrBuffer))
-				m.stderrViewport.GotoBottom()
-			}
-		}
+		m.handleLiveOutput(msg.stepID, msg.line, false)
 		if m.runner != nil {
 			return m, m.runner.NextCmd()
 		}
@@ -215,140 +191,146 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		if m.saveErr != "" {
-			m.saveErr = ""
-		}
-		if m.skipConfirm {
-			switch msg.String() {
-			case "y", "Y":
-				m.skipCurrentStep()
-				m.skipConfirm = false
-				return m, m.autoSave()
-			case "n", "N", "q", "esc":
-				m.skipConfirm = false
-				return m, nil
-			}
-			return m, nil
-		}
-
-		if m.showSessionList {
-			switch msg.String() {
-			case "q", "esc":
-				m.showSessionList = false
-				return m, nil
-			case "n":
-				m.session = NewSession(m.workflow, m.session.Cwd)
-				m.cursor = 0
-				m.updateParamInputs()
-				m.stdoutBuffer = nil
-				m.stderrBuffer = nil
-				m.stdoutViewport.SetContent("")
-				m.stderrViewport.SetContent("")
-				m.showSessionList = false
-				return m, m.autoSave()
-			case "up", "k":
-				if m.sessionCursor > 0 {
-					m.sessionCursor--
-				}
-			case "down", "j":
-				if m.sessionCursor < len(m.sessionList)-1 {
-					m.sessionCursor++
-				}
-			case "enter":
-				if m.sessionCursor < len(m.sessionList) {
-					m.session = m.sessionList[m.sessionCursor]
-					m.cursor = 0
-					m.updateParamInputs()
-					m.loadStepOutput()
-					m.showSessionList = false
-					return m, nil
-				}
-			}
-			return m, nil
-		}
-
-		if m.focusedParam >= 0 {
-			if msg.String() == "tab" {
-				m.focusedParam = (m.focusedParam + 1) % len(m.paramNames)
-				return m, m.blurAllExcept(m.focusedParam)
-			}
-			if msg.String() == "shift+tab" {
-				m.focusedParam--
-				if m.focusedParam < 0 {
-					m.focusedParam = len(m.paramNames) - 1
-				}
-				return m, m.blurAllExcept(m.focusedParam)
-			}
-			if msg.String() == "esc" {
-				m.focusedParam = -1
-				return m, m.blurAllParams()
-			}
-			name := m.paramNames[m.focusedParam]
-			input, ok := m.paramInputs[name]
-			if ok {
-				newInput, cmd := input.Update(msg)
-				m.paramInputs[name] = newInput
-				m.session.SetParameterValue(name, newInput.Value())
-				cmds = append(cmds, cmd, m.autoSave())
-			}
-			return m, tea.Batch(cmds...)
-		}
-
-		switch msg.String() {
-		case "q", "ctrl+c":
-			if m.runner != nil {
-				m.runner.Stop()
-			}
-			return m, tea.Quit
-		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
-				m.loadStepOutput()
-			}
-		case "down", "j":
-			if m.workflow != nil && m.cursor < len(m.workflow.Steps)-1 {
-				m.cursor++
-				m.loadStepOutput()
-			}
-		case "tab":
-			if len(m.paramNames) > 0 {
-				m.focusedParam = 0
-				return m, m.blurAllExcept(0)
-			}
-		case "r":
-			if m.canRun() {
-				return m, m.runCurrentStep()
-			}
-		case "d":
-			if m.canSkip() {
-				m.skipConfirm = true
-			}
-		case "s":
-			m.showSessionList = true
-			m.sessionCursor = 0
-			m.sessionList, _ = FindSessionsForWorkflow(m.workflow.Name, m.session.Cwd)
-		case "pgup":
-			m.stdoutViewport.PageUp()
-		case "pgdown":
-			m.stdoutViewport.PageDown()
-		case "home":
-			m.stdoutViewport.GotoTop()
-		case "end":
-			m.stdoutViewport.GotoBottom()
-		default:
-			// Pass unhandled keys to the viewport for scrolling
-			var cmd tea.Cmd
-			m.stdoutViewport, cmd = m.stdoutViewport.Update(msg)
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-			m.stderrViewport, cmd = m.stderrViewport.Update(msg)
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-		}
+		return m.handleKeyMsg(msg)
 	}
 
+	return m, tea.Batch(cmds...)
+}
+
+func (m model) handleKeyMsg(msg tea.KeyMsg) (model, tea.Cmd) {
+	var cmds []tea.Cmd
+	if m.saveErr != "" {
+		m.saveErr = ""
+	}
+	if m.skipConfirm {
+		switch msg.String() {
+		case "y", "Y":
+			m.skipCurrentStep()
+			m.skipConfirm = false
+			return m, m.autoSave()
+		case "n", "N", "q", "esc":
+			m.skipConfirm = false
+			return m, nil
+		}
+		return m, nil
+	}
+
+	if m.showSessionList {
+		switch msg.String() {
+		case "q", "esc":
+			m.showSessionList = false
+			return m, nil
+		case "n":
+			m.session = NewSession(m.workflow, m.session.Cwd)
+			m.cursor = 0
+			m.updateParamInputs()
+			m.stdoutBuffer = nil
+			m.stderrBuffer = nil
+			m.stdoutViewport.SetContent("")
+			m.stderrViewport.SetContent("")
+			m.showSessionList = false
+			return m, m.autoSave()
+		case "up", "k":
+			if m.sessionCursor > 0 {
+				m.sessionCursor--
+			}
+		case "down", "j":
+			if m.sessionCursor < len(m.sessionList)-1 {
+				m.sessionCursor++
+			}
+		case "enter":
+			if m.sessionCursor < len(m.sessionList) {
+				m.session = m.sessionList[m.sessionCursor]
+				m.cursor = 0
+				m.updateParamInputs()
+				m.loadStepOutput()
+				m.showSessionList = false
+				return m, nil
+			}
+		}
+		return m, nil
+	}
+
+	if m.focusedParam >= 0 {
+		if msg.String() == "tab" {
+			m.focusedParam = (m.focusedParam + 1) % len(m.paramNames)
+			return m, m.blurAllExcept(m.focusedParam)
+		}
+		if msg.String() == "shift+tab" {
+			m.focusedParam--
+			if m.focusedParam < 0 {
+				m.focusedParam = len(m.paramNames) - 1
+			}
+			return m, m.blurAllExcept(m.focusedParam)
+		}
+		if msg.String() == "esc" {
+			m.focusedParam = -1
+			return m, m.blurAllParams()
+		}
+		name := m.paramNames[m.focusedParam]
+		input, ok := m.paramInputs[name]
+		if ok {
+			newInput, cmd := input.Update(msg)
+			m.paramInputs[name] = newInput
+			m.session.SetParameterValue(name, newInput.Value())
+			cmds = append(cmds, cmd, m.autoSave())
+		}
+		return m, tea.Batch(cmds...)
+	}
+
+	switch msg.String() {
+	case "q", "ctrl+c":
+		if m.runner != nil {
+			m.runner.Stop()
+		}
+		return m, tea.Quit
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+			m.loadStepOutput()
+		}
+	case "down", "j":
+		if m.workflow != nil && m.cursor < len(m.workflow.Steps)-1 {
+			m.cursor++
+			m.loadStepOutput()
+		}
+	case "tab":
+		if len(m.paramNames) > 0 {
+			m.focusedParam = 0
+			return m, m.blurAllExcept(0)
+		}
+	case "r":
+		if m.canRun() {
+			return m, m.runCurrentStep()
+		}
+	case "d":
+		if m.canSkip() {
+			m.skipConfirm = true
+		}
+	case "s":
+		m.showSessionList = true
+		m.sessionCursor = 0
+		m.sessionList, _ = FindSessionsForWorkflow(m.workflow.Name, m.session.Cwd)
+	case "pgup":
+		m.stdoutViewport.PageUp()
+	case "pgdown":
+		m.stdoutViewport.PageDown()
+	case "home":
+		m.stdoutViewport.GotoTop()
+	case "end":
+		m.stdoutViewport.GotoBottom()
+	default:
+		// Pass unhandled keys to the viewport for scrolling
+		var cmd tea.Cmd
+		m.stdoutViewport, cmd = m.stdoutViewport.Update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		m.stderrViewport, cmd = m.stderrViewport.Update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
 	return m, tea.Batch(cmds...)
 }
 
@@ -436,9 +418,13 @@ func (m model) Cursor() *tea.Cursor {
 	leftW := m.leftWidth()
 	// X offset: left pane width + left border of the right pane
 	c.X += leftW + 1
-	// Y offset: titleBar(1) + params pane top border(1) + "Parameters" title(1) +
-	//           label line(1) + all previous parameters (paramBlockHeight each)
-	c.Y += 1 + 1 + 1 + 1 + m.focusedParam*paramBlockHeight
+	const (
+		titleBarHeight        = 1
+		paramsPaneBorderTop   = 1
+		paramsPaneTitleHeight = 1
+		paramLabelHeight      = 1
+	)
+	c.Y += titleBarHeight + paramsPaneBorderTop + paramsPaneTitleHeight + paramLabelHeight + m.focusedParam*paramBlockHeight
 	return c
 }
 
@@ -740,6 +726,34 @@ func (m *model) skipCurrentStep() {
 	}
 	step := m.workflow.Steps[m.cursor]
 	m.session.UpdateStepState(step.ID, StepState{Status: StatusSkipped})
+}
+
+// handleLiveOutput appends a line to the live output buffer for a running step.
+func (m *model) handleLiveOutput(stepID string, line string, isStdout bool) {
+	if m.currentStepID != stepID {
+		return
+	}
+	liveOut := m.liveOutputs[stepID]
+	if liveOut == nil {
+		liveOut = &liveOutput{}
+		m.liveOutputs[stepID] = liveOut
+	}
+	if isStdout {
+		liveOut.stdout = append(liveOut.stdout, line...)
+	} else {
+		liveOut.stderr = append(liveOut.stderr, line...)
+	}
+	if m.workflow != nil && m.cursor < len(m.workflow.Steps) && m.workflow.Steps[m.cursor].ID == stepID {
+		if isStdout {
+			m.stdoutBuffer = liveOut.stdout
+			m.stdoutViewport.SetContent(string(m.stdoutBuffer))
+			m.stdoutViewport.GotoBottom()
+		} else {
+			m.stderrBuffer = liveOut.stderr
+			m.stderrViewport.SetContent(string(m.stderrBuffer))
+			m.stderrViewport.GotoBottom()
+		}
+	}
 }
 
 // loadStepOutput populates the stdout/stderr buffers from the currently selected step.
