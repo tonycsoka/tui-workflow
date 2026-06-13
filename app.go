@@ -167,6 +167,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Stdout:   string(liveOut.stdout),
 					Stderr:   string(liveOut.stderr),
 				})
+				// Sync the live buffers so refreshStdoutContent() renders the full output.
+				m.stdoutBuffer = liveOut.stdout
+				m.stderrBuffer = liveOut.stderr
 			}
 			delete(m.liveOutputs, msg.stepID)
 		}
@@ -836,7 +839,12 @@ func (m model) renderViewportContent() string {
 	if top >= len(lines) {
 		return ""
 	}
-	return strings.Join(lines[top:bottom], "\n")
+	visible := lines[top:bottom]
+	// Pad to viewport height so the pane stays the same size regardless of content length.
+	for len(visible) < height {
+		visible = append(visible, "")
+	}
+	return strings.Join(visible, "\n")
 }
 
 // renderTitle returns the title bar showing workflow name, description, and session name.
