@@ -20,7 +20,7 @@ A JSON-driven terminal UI for running sequenced, parameterised shell workflows.
 ### From GitHub (latest)
 
 ```bash
-go install github.com/yourusername/tui-workflow@latest
+go install github.com/tonycsoka/tui-workflow@latest
 ```
 
 Then run it directly:
@@ -32,7 +32,7 @@ tui-workflow <workflow.json>
 ### From source
 
 ```bash
-git clone https://github.com/yourusername/tui-workflow.git
+git clone https://github.com/tonycsoka/tui-workflow.git
 cd tui-workflow
 go build .
 ```
