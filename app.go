@@ -23,8 +23,8 @@ var (
 	stepSkippedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Strikethrough(true)
 
 	// Pane styles
-	leftPaneStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(1)
-	paneStyle     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()) // no padding, just border
+	leftPaneStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder())
+	paneStyle     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder())
 
 	// Title and label styles
 	paneTitleStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("250"))
@@ -90,9 +90,9 @@ type model struct {
 	mdRendererCache map[int]*glamour.TermRenderer // cached glamour renderers per width
 	mdViewportLines []string                      // cached split of markdown content
 
-	autoRun     bool // chain auto-run mode active
-	savePending bool // debounce flag for autoSave
-	saveErr    string // transient error from autoSave
+	autoRun     bool   // chain auto-run mode active
+	savePending bool   // debounce flag for autoSave
+	saveErr     string // transient error from autoSave
 }
 
 func initialModel(wf *Workflow, session *Session, workflowDir string) model {
@@ -406,11 +406,11 @@ func (m model) View() tea.View {
 	} else {
 		stdoutContent = m.stdoutViewport.View()
 	}
-	stdout := paneStyle.Width(max(2, rightW-paneFrameH)).Render(
-		paneTitleStyle.Render("Stdout") + "\n" + stdoutContent)
 
 	params := paneStyle.Width(max(2, rightW-paneFrameH)).Render(
 		paneTitleStyle.Render("Parameters") + "\n" + paramsContent)
+	stdout := paneStyle.Width(max(2, rightW-paneFrameH)).Render(
+		paneTitleStyle.Render("Stdout") + "\n" + stdoutContent)
 	stderr := paneStyle.Width(max(2, rightW-paneFrameH)).Render(
 		paneTitleStyle.Render("Stderr") + "\n" + stderrContent)
 
