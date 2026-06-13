@@ -58,24 +58,24 @@ var (
 	}
 
 	tabInactive = lipgloss.NewStyle().
-		Border(tabBorder, true).
-		BorderForeground(lipgloss.Color("244")).
-		Foreground(lipgloss.Color("244")).
-		Padding(0, 1)
+				Border(tabBorder, true).
+				BorderForeground(lipgloss.Color("244")).
+				Foreground(lipgloss.Color("244")).
+				Padding(0, 1)
 
 	tabActive = lipgloss.NewStyle().
-		Border(tabActiveBorder, true).
-		BorderForeground(lipgloss.Color("250")).
-		Bold(true).
-		Foreground(lipgloss.Color("250")).
-		Padding(0, 1)
+				Border(tabActiveBorder, true).
+				BorderForeground(lipgloss.Color("250")).
+				Bold(true).
+				Foreground(lipgloss.Color("250")).
+				Padding(0, 1)
 
 	tabGap = lipgloss.NewStyle().
-		Border(tabBorder, true).
-		BorderForeground(lipgloss.Color("244")).
-		BorderTop(false).
-		BorderLeft(false).
-		BorderRight(false)
+			Border(tabBorder, true).
+			BorderForeground(lipgloss.Color("244")).
+			BorderTop(false).
+			BorderLeft(false).
+			BorderRight(false)
 )
 
 // Layout constants for the TUI.
@@ -102,6 +102,13 @@ type liveOutput struct {
 	stderr []byte
 }
 
+// displayLine represents a single line in the step list UI.
+type displayLine struct {
+	isGroupHeader bool
+	itemIndex     int
+	stepIndex     int
+}
+
 type model struct {
 	workflow    *Workflow
 	session     *Session
@@ -123,8 +130,8 @@ type model struct {
 	sessionList     []*Session
 	sessionCursor   int
 
-	runner        *stepRunner
-	currentStepID string
+	runners map[string]*stepRunner
+
 	stdoutBuffer  []byte
 	stderrBuffer  []byte
 
@@ -149,6 +156,7 @@ func initialModel(wf *Workflow, session *Session, workflowDir string) model {
 		paramNames:   make([]string, 0, len(wf.Parameters)),
 		focusedParam: -1,
 		liveOutputs:  make(map[string]*liveOutput),
+		runners:      make(map[string]*stepRunner),
 		outputTab:    0,
 	}
 	for name := range wf.Parameters {
@@ -163,6 +171,67 @@ func initialModel(wf *Workflow, session *Session, workflowDir string) model {
 func (m model) Init() tea.Cmd {
 	// Init returns no commands. If async loading is needed in the future, return a tea.Cmd here.
 	return nil
+}
+
+func (m model) displayLines() []displayLine {
+	if m.workflow == nil {
+		return nil
+	}
+	var lines []displayLine
+	items := m.workflow.Items()
+	stepIdx := 0
+	for i, item := range items {
+		if item.Type == "step" {
+			lines = append(lines, displayLine{
+				isGroupHeader: false,
+				itemIndex:     i,
+				stepIndex:     stepIdx,
+			})
+			stepIdx++
+		} else {
+			lines = append(lines, displayLine{
+				isGroupHeader: true,
+				itemIndex:     i,
+				stepIndex:     -1,
+			})
+			for j := 0; j < len(item.Group.Steps); j++ {
+				lines = append(lines, displayLine{
+					isGroupHeader: false,
+					itemIndex:     i,
+					stepIndex:     stepIdx,
+				})
+				stepIdx++
+			}
+		}
+	}
+	return lines
+}
+
+func (m model) currentDisplayLine() displayLine {
+	lines := m.displayLines()
+	if m.cursor < 0 || m.cursor >= len(lines) {
+		return displayLine{}
+	}
+	return lines[m.cursor]
+}
+
+func (m model) stepIndexInFlatSteps(stepID string) int {
+	for i, flat := range m.workflow.FlatSteps() {
+		if flat.Step.ID == stepID {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m model) firstDisplayIndexForItem(itemIdx int) int {
+	lines := m.displayLines()
+	for i, line := range lines {
+		if line.itemIndex == itemIdx {
+			return i
+		}
+	}
+	return 0
 }
 
 type errMsg struct{ err error }
@@ -180,62 +249,104 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case shellStdoutMsg:
 		m.handleLiveOutput(msg.stepID, msg.line, true)
-		if m.runner != nil {
-			return m, m.runner.NextCmd()
+		if runner, ok := m.runners[msg.stepID]; ok && runner != nil {
+			return m, runner.NextCmd()
 		}
 
 	case shellStderrMsg:
 		m.handleLiveOutput(msg.stepID, msg.line, false)
-		if m.runner != nil {
-			return m, m.runner.NextCmd()
+		if runner, ok := m.runners[msg.stepID]; ok && runner != nil {
+			return m, runner.NextCmd()
 		}
 
 	case shellDoneMsg:
-		if m.currentStepID == msg.stepID {
-			// Drain any remaining stdout/stderr before saving
-			if m.runner != nil {
-				stdoutLines, stderrLines := m.runner.Drain()
-				liveOut := m.liveOutputs[msg.stepID]
-				if liveOut == nil {
-					liveOut = &liveOutput{}
-					m.liveOutputs[msg.stepID] = liveOut
-				}
-				for _, line := range stdoutLines {
-					liveOut.stdout = append(liveOut.stdout, line...)
-				}
-				for _, line := range stderrLines {
-					liveOut.stderr = append(liveOut.stderr, line...)
-				}
-			}
+		if runner, ok := m.runners[msg.stepID]; ok && runner != nil {
+			stdoutLines, stderrLines := runner.Drain()
 			liveOut := m.liveOutputs[msg.stepID]
-			if liveOut != nil {
-				m.session.UpdateStepState(msg.stepID, StepState{
-					Status:   msg.status,
-					ExitCode: msg.exitCode,
-					Stdout:   string(liveOut.stdout),
-					Stderr:   string(liveOut.stderr),
-				})
-				// Sync the live buffers so refreshStdoutContent() renders the full output.
-				m.stdoutBuffer = liveOut.stdout
-				m.stderrBuffer = liveOut.stderr
+			if liveOut == nil {
+				liveOut = &liveOutput{}
+				m.liveOutputs[msg.stepID] = liveOut
+			}
+			for _, line := range stdoutLines {
+				liveOut.stdout = append(liveOut.stdout, line...)
+			}
+			for _, line := range stderrLines {
+				liveOut.stderr = append(liveOut.stderr, line...)
+			}
+			delete(m.runners, msg.stepID)
+		}
+
+		liveOut := m.liveOutputs[msg.stepID]
+		if liveOut != nil {
+			m.session.UpdateStepState(msg.stepID, StepState{
+				Status:   msg.status,
+				ExitCode: msg.exitCode,
+				Stdout:   string(liveOut.stdout),
+				Stderr:   string(liveOut.stderr),
+			})
+			// Sync the live buffers if this is the currently viewed step
+			dl := m.currentDisplayLine()
+			if !dl.isGroupHeader && dl.stepIndex >= 0 && dl.stepIndex < len(m.workflow.FlatSteps()) {
+				if m.workflow.FlatSteps()[dl.stepIndex].Step.ID == msg.stepID {
+					m.stdoutBuffer = liveOut.stdout
+					m.stderrBuffer = liveOut.stderr
+				}
 			}
 			delete(m.liveOutputs, msg.stepID)
+		} else {
+			m.session.UpdateStepState(msg.stepID, StepState{
+				Status:   msg.status,
+				ExitCode: msg.exitCode,
+			})
 		}
-		m.runner = nil
-		m.currentStepID = ""
 		m.refreshStdoutContent()
 		// For markdown output, scroll to top so the user sees the beginning
-		if m.workflow != nil && m.cursor < len(m.workflow.Steps) && m.workflow.Steps[m.cursor].OutputType == OutputMarkdown {
+		dl := m.currentDisplayLine()
+		if m.workflow != nil && !dl.isGroupHeader && dl.stepIndex >= 0 && dl.stepIndex < len(m.workflow.FlatSteps()) && m.workflow.FlatSteps()[dl.stepIndex].Step.OutputType == OutputMarkdown {
 			m.stdoutViewport.SetYOffset(0)
 		}
-		// Auto-run chain: if active and step succeeded, try to run the next auto-run step
+		// Auto-run chain: if active and step succeeded, try to run the next item
 		if m.autoRun {
-			if msg.status == StatusSuccess {
-				if m.workflow != nil && m.cursor < len(m.workflow.Steps)-1 {
-					m.cursor++
-					m.loadStepOutput()
-					if m.canRun() && m.workflow.Steps[m.cursor].AutoRun {
-						return m, m.runCurrentStep()
+			// Find the item this step belongs to
+			var stepItemIdx int
+			for _, flat := range m.workflow.FlatSteps() {
+				if flat.Step.ID == msg.stepID {
+					stepItemIdx = flat.ItemIndex
+					break
+				}
+			}
+			items := m.workflow.Items()
+			item := items[stepItemIdx]
+
+			// If it's a group and not complete, keep waiting
+			if item.Type == "group" && !m.session.IsGroupComplete(item.Group) {
+				return m, m.autoSave()
+			}
+
+			// If the step/group failed, stop auto-run
+			if msg.status != StatusSuccess {
+				m.autoRun = false
+				return m, m.autoSave()
+			}
+
+			// Advance to next item
+			if stepItemIdx < len(items)-1 {
+				nextItemIdx := stepItemIdx + 1
+				m.cursor = m.firstDisplayIndexForItem(nextItemIdx)
+				m.loadStepOutput()
+
+				nextItem := items[nextItemIdx]
+				if nextItem.Type == "group" {
+					cmd := m.runGroup(nextItem.Group, m.autoRun)
+					if cmd == nil {
+						// No auto_run steps to run in group, stop auto-run
+						m.autoRun = false
+						return m, m.autoSave()
+					}
+					return m, cmd
+				} else {
+					if nextItem.Step.AutoRun && m.session.IsStepRunnable(m.workflow, m.stepIndexInFlatSteps(nextItem.Step.ID)) {
+						return m, m.runStep(nextItem.Step)
 					}
 				}
 			}
@@ -348,8 +459,10 @@ func (m model) handleKeyMsg(msg tea.KeyMsg) (model, tea.Cmd) {
 
 	switch msg.String() {
 	case "q", "ctrl+c":
-		if m.runner != nil {
-			m.runner.Stop()
+		for _, runner := range m.runners {
+			if runner != nil {
+				runner.Stop()
+			}
 		}
 		return m, tea.Quit
 	case "up", "k":
@@ -358,7 +471,8 @@ func (m model) handleKeyMsg(msg tea.KeyMsg) (model, tea.Cmd) {
 			m.loadStepOutput()
 		}
 	case "down", "j":
-		if m.workflow != nil && m.cursor < len(m.workflow.Steps)-1 {
+		displayLines := m.displayLines()
+		if m.workflow != nil && m.cursor < len(displayLines)-1 {
 			m.cursor++
 			m.loadStepOutput()
 		}
@@ -381,6 +495,7 @@ func (m model) handleKeyMsg(msg tea.KeyMsg) (model, tea.Cmd) {
 		m.loadStepOutput()
 	case "r":
 		if m.canRun() {
+			m.autoRun = false
 			return m, m.runCurrentStep()
 		}
 	case "R":
@@ -466,7 +581,8 @@ func (m model) View() tea.View {
 		// For markdown output, bypass the viewport's broken MaxWidth truncation
 		// and the pane's Width wrapping (both are not ANSI-aware in lipgloss).
 		// Glamour already wraps at the correct width, so we render directly.
-		if m.workflow != nil && m.cursor < len(m.workflow.Steps) && m.workflow.Steps[m.cursor].OutputType == OutputMarkdown && m.stdoutViewport.GetContent() != "" {
+		dl := m.currentDisplayLine()
+		if m.workflow != nil && !dl.isGroupHeader && dl.stepIndex >= 0 && dl.stepIndex < len(m.workflow.FlatSteps()) && m.workflow.FlatSteps()[dl.stepIndex].Step.OutputType == OutputMarkdown && m.stdoutViewport.GetContent() != "" {
 			outputContent = m.renderViewportContent()
 		} else {
 			outputContent = m.stdoutViewport.View()
@@ -574,17 +690,18 @@ func (m *model) refreshStdoutContent() {
 	normalWidth := max(2, m.rightWidth())
 	stdoutStr := string(m.stdoutBuffer)
 
-	if m.workflow == nil || m.cursor >= len(m.workflow.Steps) {
+	dl := m.currentDisplayLine()
+	if m.workflow == nil || dl.isGroupHeader || dl.stepIndex < 0 || dl.stepIndex >= len(m.workflow.FlatSteps()) {
 		m.stdoutViewport.SetWidth(normalWidth)
 		m.stdoutViewport.SetContent(stdoutStr)
 		m.stderrViewport.SetContent(string(m.stderrBuffer))
 		return
 	}
 
-	step := m.workflow.Steps[m.cursor]
-	isRunningThisStep := m.currentStepID == step.ID
+	step := m.workflow.FlatSteps()[dl.stepIndex].Step
+	_, isRunning := m.runners[step.ID]
 
-	if !isRunningThisStep && step.OutputType == OutputMarkdown && stdoutStr != "" {
+	if !isRunning && step.OutputType == OutputMarkdown && stdoutStr != "" {
 		rendered, err := m.renderMarkdown(stdoutStr, normalWidth)
 		if err == nil {
 			stdoutStr = rendered
@@ -616,51 +733,104 @@ func (m model) renderStepListContent(w int) string {
 	lines = append(lines, paneTitleStyle.Render("Steps"))
 	lines = append(lines, "")
 
-	for i, step := range m.workflow.Steps {
-		state, ok := m.session.StepStates[step.ID]
-		if !ok {
-			state = StepState{Status: StatusPending}
-		}
+	displayLines := m.displayLines()
+	for i, dl := range displayLines {
+		if dl.isGroupHeader {
+			item := m.workflow.Items()[dl.itemIndex]
+			group := item.Group
+			status := m.session.ItemStatus(item)
 
-		style := stepPendingStyle
-		statusText := "pending"
-		switch state.Status {
-		case StatusRunning:
-			style = stepRunningStyle
-			statusText = "running"
-		case StatusSuccess:
-			style = stepSuccessStyle
-			statusText = "done"
-		case StatusFailed:
-			style = stepFailedStyle
-			statusText = "failed"
-		case StatusSkipped:
-			style = stepSkippedStyle
-			statusText = "skipped"
-		}
+			style := stepPendingStyle
+			statusText := "pending"
+			switch status {
+			case StatusRunning:
+				style = stepRunningStyle
+				statusText = "running"
+			case StatusSuccess:
+				style = stepSuccessStyle
+				statusText = "done"
+			case StatusFailed:
+				style = stepFailedStyle
+				statusText = "failed"
+			case StatusSkipped:
+				style = stepSkippedStyle
+				statusText = "skipped"
+			}
 
-		prefix := "  "
-		if i == m.cursor {
-			prefix = "> "
-			style = style.Copy().Background(lipgloss.Color(cursorBgColor)).Bold(true)
-		}
+			prefix := "  "
+			if i == m.cursor {
+				prefix = "> "
+				style = style.Copy().Background(lipgloss.Color(cursorBgColor)).Bold(true)
+			}
 
-		icon := m.statusIcon(state.Status)
-		runIcon := m.runTypeIcon(step)
-		line := style.Copy().MaxWidth(w).Render(fmt.Sprintf("%s%s %s %s — %s", prefix, icon, runIcon, step.Name, statusText))
-		lines = append(lines, line)
+			icon := m.statusIcon(status)
+			line := style.Copy().MaxWidth(w).Render(fmt.Sprintf("%s%s %s — %s", prefix, icon, group.Name, statusText))
+			lines = append(lines, line)
+		} else {
+			flat := m.workflow.FlatSteps()[dl.stepIndex]
+			step := flat.Step
+			state := m.session.StepStates[step.ID]
+
+			style := stepPendingStyle
+			statusText := "pending"
+			switch state.Status {
+			case StatusRunning:
+				style = stepRunningStyle
+				statusText = "running"
+			case StatusSuccess:
+				style = stepSuccessStyle
+				statusText = "done"
+			case StatusFailed:
+				style = stepFailedStyle
+				statusText = "failed"
+			case StatusSkipped:
+				style = stepSkippedStyle
+				statusText = "skipped"
+			}
+
+			prefix := "  "
+			if flat.GroupID != "" {
+				prefix = "    "
+			}
+			if i == m.cursor {
+				if flat.GroupID != "" {
+					prefix = "  > "
+				} else {
+					prefix = "> "
+				}
+				style = style.Copy().Background(lipgloss.Color(cursorBgColor)).Bold(true)
+			}
+
+			icon := m.statusIcon(state.Status)
+			runIcon := m.runTypeIcon(step)
+			line := style.Copy().MaxWidth(w).Render(fmt.Sprintf("%s%s %s %s — %s", prefix, icon, runIcon, step.Name, statusText))
+			lines = append(lines, line)
+		}
 	}
 
 	content := strings.Join(lines, "\n")
 	return content
 }
 
-// renderStepInfo returns a short info block for the currently selected step.
+// renderStepInfo returns a short info block for the currently selected step or group.
 func (m model) renderStepInfo(w int) string {
-	if m.workflow == nil || m.session == nil || m.cursor >= len(m.workflow.Steps) {
+	if m.workflow == nil || m.session == nil {
 		return ""
 	}
-	step := m.workflow.Steps[m.cursor]
+	dl := m.currentDisplayLine()
+	if dl.isGroupHeader {
+		item := m.workflow.Items()[dl.itemIndex]
+		group := item.Group
+		desc := group.Description
+		if desc == "" {
+			desc = "(no description)"
+		}
+		return lipgloss.NewStyle().Render(desc)
+	}
+	if dl.stepIndex < 0 || dl.stepIndex >= len(m.workflow.FlatSteps()) {
+		return ""
+	}
+	step := m.workflow.FlatSteps()[dl.stepIndex].Step
 	state := m.session.StepStates[step.ID]
 
 	desc := step.Description
@@ -736,8 +906,9 @@ func (m model) renderParamContent(w int) string {
 		}
 
 		used := false
-		if m.cursor < len(m.workflow.Steps) {
-			for _, p := range m.workflow.Steps[m.cursor].Params {
+		dl := m.currentDisplayLine()
+		if !dl.isGroupHeader && dl.stepIndex >= 0 && dl.stepIndex < len(m.workflow.FlatSteps()) {
+			for _, p := range m.workflow.FlatSteps()[dl.stepIndex].Step.Params {
 				if p == name {
 					used = true
 					break
@@ -837,13 +1008,20 @@ func (m *model) deleteSessionAtCursor() {
 }
 
 func (m model) renderSkipConfirm() string {
-	if m.workflow == nil || m.cursor < 0 || m.cursor >= len(m.workflow.Steps) {
-		return ""
+	dl := m.currentDisplayLine()
+	var name string
+	if dl.isGroupHeader {
+		item := m.workflow.Items()[dl.itemIndex]
+		name = item.Group.Name
+	} else {
+		if dl.stepIndex < 0 || dl.stepIndex >= len(m.workflow.FlatSteps()) {
+			return ""
+		}
+		name = m.workflow.FlatSteps()[dl.stepIndex].Step.Name
 	}
-	step := m.workflow.Steps[m.cursor]
 	var lines []string
 	lines = append(lines, paneTitleStyle.Render("Skip Step"), "")
-	lines = append(lines, fmt.Sprintf("Skip %q? (y/n)", step.Name))
+	lines = append(lines, fmt.Sprintf("Skip %q? (y/n)", name))
 
 	modalW := min(modalMaxWidth, m.width-4)
 	modalH := min(m.height-4, len(lines)+leftPaneStyle.GetVerticalFrameSize())
@@ -857,18 +1035,32 @@ func (m model) renderSkipConfirm() string {
 // --- Logic ---
 
 func (m *model) skipCurrentStep() {
-	if m.workflow == nil || m.session == nil || m.cursor < 0 || m.cursor >= len(m.workflow.Steps) {
+	if m.workflow == nil || m.session == nil {
 		return
 	}
-	step := m.workflow.Steps[m.cursor]
+	dl := m.currentDisplayLine()
+	if dl.isGroupHeader {
+		item := m.workflow.Items()[dl.itemIndex]
+		if item.Type != "group" {
+			return
+		}
+		for _, step := range item.Group.Steps {
+			state := m.session.StepStates[step.ID]
+			if state.Status == StatusPending || state.Status == StatusFailed {
+				m.session.UpdateStepState(step.ID, StepState{Status: StatusSkipped})
+			}
+		}
+		return
+	}
+	if dl.stepIndex < 0 || dl.stepIndex >= len(m.workflow.FlatSteps()) {
+		return
+	}
+	step := m.workflow.FlatSteps()[dl.stepIndex].Step
 	m.session.UpdateStepState(step.ID, StepState{Status: StatusSkipped})
 }
 
 // handleLiveOutput appends a line to the live output buffer for a running step.
 func (m *model) handleLiveOutput(stepID string, line string, isStdout bool) {
-	if m.currentStepID != stepID {
-		return
-	}
 	liveOut := m.liveOutputs[stepID]
 	if liveOut == nil {
 		liveOut = &liveOutput{}
@@ -879,15 +1071,18 @@ func (m *model) handleLiveOutput(stepID string, line string, isStdout bool) {
 	} else {
 		liveOut.stderr = append(liveOut.stderr, line...)
 	}
-	if m.workflow != nil && m.cursor < len(m.workflow.Steps) && m.workflow.Steps[m.cursor].ID == stepID {
-		if isStdout {
-			m.stdoutBuffer = liveOut.stdout
-			m.stdoutViewport.SetContent(string(m.stdoutBuffer))
-			m.stdoutViewport.GotoBottom()
-		} else {
-			m.stderrBuffer = liveOut.stderr
-			m.stderrViewport.SetContent(string(m.stderrBuffer))
-			m.stderrViewport.GotoBottom()
+	dl := m.currentDisplayLine()
+	if !dl.isGroupHeader && dl.stepIndex >= 0 && dl.stepIndex < len(m.workflow.FlatSteps()) {
+		if m.workflow.FlatSteps()[dl.stepIndex].Step.ID == stepID {
+			if isStdout {
+				m.stdoutBuffer = liveOut.stdout
+				m.stdoutViewport.SetContent(string(m.stdoutBuffer))
+				m.stdoutViewport.GotoBottom()
+			} else {
+				m.stderrBuffer = liveOut.stderr
+				m.stderrViewport.SetContent(string(m.stderrBuffer))
+				m.stderrViewport.GotoBottom()
+			}
 		}
 	}
 }
@@ -897,15 +1092,30 @@ func (m *model) handleLiveOutput(stepID string, line string, isStdout bool) {
 // the persisted session state so the user can navigate away and back without losing
 // the live stream.
 func (m *model) loadStepOutput() {
-	if m.workflow == nil || m.session == nil || m.cursor >= len(m.workflow.Steps) {
+	if m.workflow == nil || m.session == nil {
 		m.stdoutBuffer = nil
 		m.stderrBuffer = nil
 		m.stdoutViewport.SetContent("")
 		m.stderrViewport.SetContent("")
 		return
 	}
-	step := m.workflow.Steps[m.cursor]
-	if m.currentStepID == step.ID {
+	dl := m.currentDisplayLine()
+	if dl.isGroupHeader {
+		m.stdoutBuffer = nil
+		m.stderrBuffer = nil
+		m.stdoutViewport.SetContent("")
+		m.stderrViewport.SetContent("")
+		return
+	}
+	if dl.stepIndex < 0 || dl.stepIndex >= len(m.workflow.FlatSteps()) {
+		m.stdoutBuffer = nil
+		m.stderrBuffer = nil
+		m.stdoutViewport.SetContent("")
+		m.stderrViewport.SetContent("")
+		return
+	}
+	step := m.workflow.FlatSteps()[dl.stepIndex].Step
+	if runner, ok := m.runners[step.ID]; ok && runner != nil {
 		if liveOut, ok := m.liveOutputs[step.ID]; ok && liveOut != nil {
 			m.stdoutBuffer = liveOut.stdout
 			m.stderrBuffer = liveOut.stderr
@@ -1034,14 +1244,45 @@ func (m model) canRun() bool {
 	if !m.allParamsSet() {
 		return false
 	}
-	return m.session.IsStepRunnable(m.workflow, m.cursor)
+	dl := m.currentDisplayLine()
+	if dl.isGroupHeader {
+		item := m.workflow.Items()[dl.itemIndex]
+		if item.Type != "group" {
+			return false
+		}
+		for _, step := range item.Group.Steps {
+			idx := m.stepIndexInFlatSteps(step.ID)
+			if m.session.IsStepRunnable(m.workflow, idx) {
+				return true
+			}
+		}
+		return false
+	}
+	return m.session.IsStepRunnable(m.workflow, dl.stepIndex)
 }
 
 func (m model) canSkip() bool {
-	if m.workflow == nil || m.session == nil || m.cursor < 0 || m.cursor >= len(m.workflow.Steps) {
+	if m.workflow == nil || m.session == nil {
 		return false
 	}
-	step := m.workflow.Steps[m.cursor]
+	dl := m.currentDisplayLine()
+	if dl.isGroupHeader {
+		item := m.workflow.Items()[dl.itemIndex]
+		if item.Type != "group" {
+			return false
+		}
+		for _, step := range item.Group.Steps {
+			state := m.session.StepStates[step.ID]
+			if state.Status == StatusPending || state.Status == StatusFailed {
+				return true
+			}
+		}
+		return false
+	}
+	if dl.stepIndex < 0 || dl.stepIndex >= len(m.workflow.FlatSteps()) {
+		return false
+	}
+	step := m.workflow.FlatSteps()[dl.stepIndex].Step
 	state := m.session.StepStates[step.ID]
 	return state.Status == StatusPending || state.Status == StatusFailed
 }
@@ -1107,30 +1348,73 @@ func (m *model) runCurrentStep() tea.Cmd {
 	if m.workflow == nil || m.session == nil {
 		return nil
 	}
-	step := m.workflow.Steps[m.cursor]
+	dl := m.currentDisplayLine()
+	if dl.isGroupHeader {
+		item := m.workflow.Items()[dl.itemIndex]
+		if item.Type != "group" {
+			return nil
+		}
+		return m.runGroup(item.Group, m.autoRun)
+	}
+	if dl.stepIndex < 0 || dl.stepIndex >= len(m.workflow.FlatSteps()) {
+		return nil
+	}
+	step := m.workflow.FlatSteps()[dl.stepIndex].Step
+	return m.runStep(step)
+}
+
+func (m *model) runGroup(group ParallelGroup, autoRun bool) tea.Cmd {
+	var cmds []tea.Cmd
+	for _, step := range group.Steps {
+		idx := m.stepIndexInFlatSteps(step.ID)
+		if m.session.IsStepRunnable(m.workflow, idx) {
+			if autoRun && !step.AutoRun {
+				continue
+			}
+			cmd := m.runStep(step)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m *model) runStep(step Step) tea.Cmd {
 	scriptPath := ResolveScriptPath(m.workflowDir, step.Script)
 	info, err := os.Stat(scriptPath)
 	if err != nil {
-		m.stderrBuffer = append(m.stderrBuffer, fmt.Sprintf("Script not found: %s\n", scriptPath)...)
+		errMsg := fmt.Sprintf("Script not found: %s\n", scriptPath)
+		m.session.UpdateStepState(step.ID, StepState{Status: StatusFailed, Stderr: errMsg})
+		m.stderrBuffer = append(m.stderrBuffer, errMsg...)
 		m.stderrViewport.SetContent(string(m.stderrBuffer))
 		m.stderrViewport.GotoBottom()
-		return nil
+		return m.autoSave()
 	}
 	if info.Mode()&0111 == 0 {
-		m.stderrBuffer = append(m.stderrBuffer, fmt.Sprintf("Script is not executable: %s\n", scriptPath)...)
+		errMsg := fmt.Sprintf("Script is not executable: %s\n", scriptPath)
+		m.session.UpdateStepState(step.ID, StepState{Status: StatusFailed, Stderr: errMsg})
+		m.stderrBuffer = append(m.stderrBuffer, errMsg...)
 		m.stderrViewport.SetContent(string(m.stderrBuffer))
 		m.stderrViewport.GotoBottom()
-		return nil
+		return m.autoSave()
 	}
 	m.session.UpdateStepState(step.ID, StepState{Status: StatusRunning})
-	m.stdoutBuffer = nil
-	m.stderrBuffer = nil
-	m.stdoutViewport.SetContent("")
-	m.stderrViewport.SetContent("")
+	// Only clear output buffers if we're viewing this step
+	dl := m.currentDisplayLine()
+	if !dl.isGroupHeader && dl.stepIndex >= 0 && dl.stepIndex < len(m.workflow.FlatSteps()) && m.workflow.FlatSteps()[dl.stepIndex].Step.ID == step.ID {
+		m.stdoutBuffer = nil
+		m.stderrBuffer = nil
+		m.stdoutViewport.SetContent("")
+		m.stderrViewport.SetContent("")
+	}
 	m.liveOutputs[step.ID] = &liveOutput{}
-	m.currentStepID = step.ID
 
 	params := buildParams(step, m)
-	m.runner = newStepRunner(step, m.workflowDir, scriptPath, params)
-	return tea.Batch(m.autoSave(), m.runner.NextCmd())
+	runner := newStepRunner(step, m.workflowDir, scriptPath, params)
+	m.runners[step.ID] = runner
+	return tea.Batch(m.autoSave(), runner.NextCmd())
 }

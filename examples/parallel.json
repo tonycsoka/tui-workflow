@@ -1,0 +1,48 @@
+{
+  "name": "parallel-demo",
+  "description": "Demonstrates parallel step groups",
+  "steps": [
+    {
+      "id": "setup",
+      "name": "Setup",
+      "script": "scripts/setup.sh",
+      "description": "Initial setup step",
+      "auto_run": true
+    },
+    {
+      "id": "tests",
+      "name": "Run Tests",
+      "description": "Run multiple tests in parallel",
+      "steps": [
+        {
+          "id": "unit",
+          "name": "Unit Tests",
+          "script": "scripts/unit.sh",
+          "run_once_per_session": true,
+          "description": "Run unit tests"
+        },
+        {
+          "id": "lint",
+          "name": "Lint",
+          "script": "scripts/lint.sh",
+          "description": "Run linter",
+          "auto_run": true
+        },
+        {
+          "id": "typecheck",
+          "name": "Type Check",
+          "script": "scripts/typecheck.sh",
+          "description": "Run type checker",
+          "auto_run": true
+        }
+      ]
+    },
+    {
+      "id": "deploy",
+      "name": "Deploy",
+      "script": "scripts/deploy.sh",
+      "description": "Deploy after all tests pass",
+      "auto_run": true
+    }
+  ]
+}

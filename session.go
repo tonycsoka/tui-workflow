@@ -20,11 +20,11 @@ func logWarning(format string, args ...interface{}) {
 type StepStatus string
 
 const (
-	StatusPending   StepStatus = "pending"
-	StatusRunning   StepStatus = "running"
-	StatusSuccess   StepStatus = "success"
-	StatusFailed    StepStatus = "failed"
-	StatusSkipped   StepStatus = "skipped"
+	StatusPending StepStatus = "pending"
+	StatusRunning StepStatus = "running"
+	StatusSuccess StepStatus = "success"
+	StatusFailed  StepStatus = "failed"
+	StatusSkipped StepStatus = "skipped"
 )
 
 // StepState tracks the execution state and output of a single step.
@@ -36,9 +36,9 @@ type StepState struct {
 	// Kept for backward compatibility with sessions created before the split.
 	//
 	// Deprecated: Use Stdout and Stderr instead.
-	Output   string     `json:"output,omitempty"`
-	Stdout   string     `json:"stdout,omitempty"`
-	Stderr   string     `json:"stderr,omitempty"`
+	Output string `json:"output,omitempty"`
+	Stdout string `json:"stdout,omitempty"`
+	Stderr string `json:"stderr,omitempty"`
 }
 
 // GetOutput returns the stdout and stderr for a step.
@@ -60,20 +60,20 @@ func (s StepState) GetOutput() (stdout, stderr string) {
 
 // Session is the persisted state for a workflow run in a specific directory.
 type Session struct {
-	Name            string                 `json:"name"`
-	WorkflowName    string                 `json:"workflow_name"`
-	Cwd             string                 `json:"cwd"`
-	CreatedAt       string                 `json:"created_at"`
-	ParameterValues map[string]string      `json:"parameter_values"`
-	StepStates      map[string]StepState   `json:"step_states"`
+	Name            string               `json:"name"`
+	WorkflowName    string               `json:"workflow_name"`
+	Cwd             string               `json:"cwd"`
+	CreatedAt       string               `json:"created_at"`
+	ParameterValues map[string]string    `json:"parameter_values"`
+	StepStates      map[string]StepState `json:"step_states"`
 }
 
 // NewSession creates a fresh session for the given workflow and directory.
 // The session name is auto-generated from the current datetime.
 func NewSession(wf *Workflow, cwd string) *Session {
 	stepStates := make(map[string]StepState)
-	for _, step := range wf.Steps {
-		stepStates[step.ID] = StepState{Status: StatusPending}
+	for _, step := range wf.FlatSteps() {
+		stepStates[step.Step.ID] = StepState{Status: StatusPending}
 	}
 
 	now := time.Now()
@@ -269,12 +269,70 @@ func (sess *Session) GetParameterValue(key string, wf *Workflow) string {
 	return ""
 }
 
+// ItemStatus returns the aggregate status of a workflow item (step or group).
+func (sess *Session) ItemStatus(item Item) StepStatus {
+	if item.Type == "step" {
+		return sess.StepStates[item.Step.ID].Status
+	}
+
+	group := item.Group
+	hasRunning := false
+	hasPending := false
+	hasFailed := false
+	allSkipped := true
+	hasSuccess := false
+
+	for _, step := range group.Steps {
+		state := sess.StepStates[step.ID]
+		switch state.Status {
+		case StatusRunning:
+			hasRunning = true
+		case StatusPending:
+			hasPending = true
+		case StatusFailed:
+			hasFailed = true
+		case StatusSkipped:
+			// nothing
+		case StatusSuccess:
+			hasSuccess = true
+			allSkipped = false
+		}
+	}
+
+	if hasRunning {
+		return StatusRunning
+	}
+	if hasPending {
+		return StatusPending
+	}
+	if hasFailed {
+		return StatusFailed
+	}
+	if allSkipped && !hasSuccess {
+		return StatusSkipped
+	}
+	return StatusSuccess
+}
+
+// IsGroupComplete returns true if all steps in the group have reached a terminal status.
+func (sess *Session) IsGroupComplete(group ParallelGroup) bool {
+	for _, step := range group.Steps {
+		state := sess.StepStates[step.ID]
+		if state.Status != StatusSuccess && state.Status != StatusFailed && state.Status != StatusSkipped {
+			return false
+		}
+	}
+	return true
+}
+
 // IsStepRunnable checks whether a step is eligible to run based on sequence and run_once.
 func (sess *Session) IsStepRunnable(wf *Workflow, idx int) bool {
-	if idx < 0 || idx >= len(wf.Steps) {
+	flatSteps := wf.FlatSteps()
+	if idx < 0 || idx >= len(flatSteps) {
 		return false
 	}
-	step := wf.Steps[idx]
+	flat := flatSteps[idx]
+	step := flat.Step
 	state := sess.StepStates[step.ID]
 
 	// If it's already running, don't run again.
@@ -292,14 +350,18 @@ func (sess *Session) IsStepRunnable(wf *Workflow, idx int) bool {
 		return false
 	}
 
-	// First step is always runnable if not already running/success.
-	if idx == 0 {
-		return state.Status == StatusPending || state.Status == StatusFailed || state.Status == StatusSkipped
+	// First item in workflow is always runnable if the step itself is not already running.
+	if flat.ItemIndex == 0 {
+		return state.Status == StatusPending || state.Status == StatusFailed || state.Status == StatusSkipped || state.Status == StatusSuccess
 	}
 
-	// Previous step must be success or skipped.
-	prevStep := wf.Steps[idx-1]
-	prevState := sess.StepStates[prevStep.ID]
-	return prevState.Status == StatusSuccess || prevState.Status == StatusSkipped
-}
+	// Get the previous item's status
+	items := wf.Items()
+	prevItem := items[flat.ItemIndex-1]
+	prevStatus := sess.ItemStatus(prevItem)
 
+	if prevStatus == StatusSuccess || prevStatus == StatusSkipped {
+		return state.Status == StatusPending || state.Status == StatusFailed || state.Status == StatusSkipped || state.Status == StatusSuccess
+	}
+	return false
+}
