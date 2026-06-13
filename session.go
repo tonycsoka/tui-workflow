@@ -78,7 +78,7 @@ func NewSession(wf *Workflow, cwd string) *Session {
 
 	now := time.Now()
 	return &Session{
-		Name:            now.Format("2006-01-02T15-04-05.000"),
+		Name:            now.Format("2006-01-02T15:04:05.000"),
 		WorkflowName:    wf.Name,
 		Cwd:             cwd,
 		CreatedAt:       now.Format(time.RFC3339),
@@ -105,7 +105,9 @@ func cwdHash(cwd string) string {
 // SessionPath returns the file path for a session based on workflow name, cwd, and session name.
 // Structure: ~/.local/share/tui-workflow/sessions/<cwd-hash>/<workflow-name>/<session-name>.json
 func SessionPath(workflowName, cwd, sessionName string) string {
-	return filepath.Join(SessionDir(), cwdHash(cwd), workflowName, sessionName+".json")
+	// Sanitize colons to dashes so the filename is safe on all filesystems.
+	safeName := strings.ReplaceAll(sessionName, ":", "-")
+	return filepath.Join(SessionDir(), cwdHash(cwd), workflowName, safeName+".json")
 }
 
 func parseSession(data []byte) (*Session, error) {

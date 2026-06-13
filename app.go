@@ -45,9 +45,10 @@ const (
 	paramBlockHeight   = 3 // label + input + spacing
 	modalMaxWidth      = 60
 
-	stepsPaneOverhead = 10 // titleBar(1) + footer(1) + infoPane(4, clamped to frame) + stepsPane frame(4)
-	cursorBgColor     = "236"
-	lastRunFgColor    = "244"
+	titleBarHeight = 1
+	footerHeight   = 1
+	cursorBgColor  = "236"
+	lastRunFgColor = "244"
 )
 
 // liveOutput holds the raw stdout/stderr for a step that is currently running.
@@ -166,6 +167,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Stdout:   string(liveOut.stdout),
 					Stderr:   string(liveOut.stderr),
 				})
+				// Sync the live buffers so refreshStdoutContent() renders the full output.
+				m.stdoutBuffer = liveOut.stdout
+				m.stderrBuffer = liveOut.stderr
 			}
 			delete(m.liveOutputs, msg.stepID)
 		}
@@ -238,6 +242,9 @@ func (m model) handleKeyMsg(msg tea.KeyMsg) (model, tea.Cmd) {
 			if m.sessionCursor < len(m.sessionList)-1 {
 				m.sessionCursor++
 			}
+		case "d":
+			m.deleteSessionAtCursor()
+			return m, m.autoSave()
 		case "enter":
 			if m.sessionCursor < len(m.sessionList) {
 				m.session = m.sessionList[m.sessionCursor]
@@ -359,12 +366,12 @@ func (m model) View() tea.View {
 	rightW := m.rightWidth()
 
 	leftContentW := max(2, leftW-leftPaneStyle.GetHorizontalFrameSize())
-	stepsContentH := max(stepsPaneMinHeight, m.height-stepsPaneOverhead)
-	infoContentH := 2
+	// Overhead: titleBar + footer + infoPane content + frames for both left panes
+	stepsContentH := max(stepsPaneMinHeight, m.height-titleBarHeight-footerHeight-infoPaneHeight-2*leftPaneStyle.GetVerticalFrameSize())
 
 	leftContentRaw := m.renderStepListContent(leftContentW)
 	stepsPane := leftPaneStyle.Width(leftContentW).Height(stepsContentH).Render(leftContentRaw)
-	infoPane := leftPaneStyle.Width(leftContentW).Height(infoContentH).Render(m.renderStepInfo(leftContentW))
+	infoPane := leftPaneStyle.Width(leftContentW).Height(infoPaneHeight).Render(m.renderStepInfo(leftContentW))
 	left := lipgloss.JoinVertical(lipgloss.Left, stepsPane, infoPane)
 
 	rightContentW := max(2, rightW-paneFrameH)
@@ -417,9 +424,9 @@ func (m model) Cursor() *tea.Cursor {
 	c := input.Cursor()
 	leftW := m.leftWidth()
 	// X offset: left pane width + left border of the right pane
-	c.X += leftW + 1
+	// paneStyle has a symmetric border and no padding, so the left border width is half the horizontal frame.
+	c.X += leftW + paneStyle.GetHorizontalFrameSize()/2
 	const (
-		titleBarHeight        = 1
 		paramsPaneBorderTop   = 1
 		paramsPaneTitleHeight = 1
 		paramLabelHeight      = 1
@@ -678,18 +685,15 @@ func (m model) renderSessionList() string {
 		default:
 			statusStyle = statusStyle.Foreground(lipgloss.Color("250"))
 		}
-		// Format the datetime for display: 2006-01-02T15-04-05.000 -> 2006-01-02 15:04:05
-		displayName := strings.Replace(sess.Name, "T", " ", 1)
-		if idx := strings.LastIndex(displayName, "."); idx > 0 {
-			displayName = displayName[:idx]
-		}
+		// Format the datetime for display: 2006-01-02T15:04:05.000 -> 2006-01-02 15:04:05
+		displayName := formatSessionNameForDisplay(sess.Name)
 		line := fmt.Sprintf("%s%s (%s)", cursor, displayName, statusStyle.Render(status))
 		lines = append(lines, line)
 	}
 	if len(m.sessionList) == 0 {
 		lines = append(lines, "  (none)")
 	}
-	lines = append(lines, "", "enter pick  n new  q/esc close")
+	lines = append(lines, "", "enter pick  n new  d delete  q/esc close")
 
 	modalW := min(modalMaxWidth, m.width-4)
 	modalH := min(m.height-4, len(lines)+leftPaneStyle.GetVerticalFrameSize())
@@ -698,6 +702,41 @@ func (m model) renderSessionList() string {
 	content := lipgloss.NewStyle().MaxWidth(contentW).MaxHeight(contentH).Render(strings.Join(lines, "\n"))
 	overlay := leftPaneStyle.Width(contentW).Height(contentH).Render(content)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
+}
+
+// deleteSessionAtCursor removes the highlighted session from disk and the list.
+// If the deleted session was the current one, it switches to another session or creates a new one.
+func (m *model) deleteSessionAtCursor() {
+	if m.sessionList == nil || m.sessionCursor < 0 || m.sessionCursor >= len(m.sessionList) {
+		return
+	}
+	sess := m.sessionList[m.sessionCursor]
+	path := SessionPath(sess.WorkflowName, sess.Cwd, sess.Name)
+	_ = os.Remove(path)
+
+	wasCurrent := m.session != nil && m.session.Name == sess.Name
+
+	m.sessionList = append(m.sessionList[:m.sessionCursor], m.sessionList[m.sessionCursor+1:]...)
+	if m.sessionCursor >= len(m.sessionList) {
+		m.sessionCursor = max(0, len(m.sessionList)-1)
+	}
+
+	if wasCurrent {
+		if len(m.sessionList) > 0 {
+			m.session = m.sessionList[m.sessionCursor]
+			m.cursor = 0
+			m.updateParamInputs()
+			m.loadStepOutput()
+		} else {
+			m.session = NewSession(m.workflow, m.session.Cwd)
+			m.cursor = 0
+			m.updateParamInputs()
+			m.stdoutBuffer = nil
+			m.stderrBuffer = nil
+			m.stdoutViewport.SetContent("")
+			m.stderrViewport.SetContent("")
+		}
+	}
 }
 
 func (m model) renderSkipConfirm() string {
@@ -835,17 +874,32 @@ func (m model) renderViewportContent() string {
 	if top >= len(lines) {
 		return ""
 	}
-	return strings.Join(lines[top:bottom], "\n")
+	visible := lines[top:bottom]
+	// Pad to viewport height so the pane stays the same size regardless of content length.
+	for len(visible) < height {
+		visible = append(visible, "")
+	}
+	return strings.Join(visible, "\n")
 }
 
 // renderTitle returns the title bar showing workflow name, description, and session name.
+// formatSessionNameForDisplay converts a raw session name (e.g. 2006-01-02T15:04:05.000)
+// into a human-readable datetime (e.g. 2006-01-02 15:04:05).
+func formatSessionNameForDisplay(name string) string {
+	displayName := strings.Replace(name, "T", " ", 1)
+	if idx := strings.LastIndex(displayName, "."); idx > 0 {
+		displayName = displayName[:idx]
+	}
+	return displayName
+}
+
 func (m model) renderTitle() string {
 	if m.workflow == nil || m.session == nil {
 		return ""
 	}
 	wfName := m.workflow.Name
 	wfDesc := m.workflow.Description
-	sessionName := m.session.Name
+	sessionName := formatSessionNameForDisplay(m.session.Name)
 
 	var parts []string
 	parts = append(parts, titleStyle.Render(wfName))
