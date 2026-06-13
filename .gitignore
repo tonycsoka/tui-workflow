@@ -1,0 +1,12 @@
+# Binary
+tui-workflow
+
+
+# macOS
+.DS_Store
+
+# Test / temp artifacts
+*.test
+*.out
+*.tmp
+coverage.*
