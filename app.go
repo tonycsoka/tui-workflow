@@ -35,8 +35,47 @@ var (
 	sessionStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Background(lipgloss.Color("235")).Padding(0, 1)
 
 	// Tab styles
-	tabActiveStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("250")).Background(lipgloss.Color("235")).Padding(0, 1)
-	tabInactiveStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Padding(0, 1)
+	tabBorder = lipgloss.Border{
+		Top:         "─",
+		Bottom:      "─",
+		Left:        "│",
+		Right:       "│",
+		TopLeft:     "╭",
+		TopRight:    "╮",
+		BottomLeft:  "┴",
+		BottomRight: "┴",
+	}
+
+	tabActiveBorder = lipgloss.Border{
+		Top:         "─",
+		Bottom:      " ",
+		Left:        "│",
+		Right:       "│",
+		TopLeft:     "╭",
+		TopRight:    "╮",
+		BottomLeft:  "┘",
+		BottomRight: "└",
+	}
+
+	tabInactive = lipgloss.NewStyle().
+		Border(tabBorder, true).
+		BorderForeground(lipgloss.Color("244")).
+		Foreground(lipgloss.Color("244")).
+		Padding(0, 1)
+
+	tabActive = lipgloss.NewStyle().
+		Border(tabActiveBorder, true).
+		BorderForeground(lipgloss.Color("250")).
+		Bold(true).
+		Foreground(lipgloss.Color("250")).
+		Padding(0, 1)
+
+	tabGap = lipgloss.NewStyle().
+		Border(tabBorder, true).
+		BorderForeground(lipgloss.Color("244")).
+		BorderTop(false).
+		BorderLeft(false).
+		BorderRight(false)
 )
 
 // Layout constants for the TUI.
@@ -421,7 +460,7 @@ func (m model) View() tea.View {
 	params := paneStyle.Width(rightW).Render(
 		paneTitleStyle.Render("Parameters") + "\n" + paramsContent)
 
-	tabBar := m.renderOutputTabs()
+	tabBar := m.renderOutputTabs(rightContentW)
 	var outputContent string
 	if m.outputTab == 0 {
 		// For markdown output, bypass the viewport's broken MaxWidth truncation
@@ -436,8 +475,7 @@ func (m model) View() tea.View {
 		outputContent = m.stderrViewport.View()
 	}
 
-	output := paneStyle.Width(rightW).Render(
-		tabBar + "\n" + outputContent)
+	output := tabBar + "\n" + outputContent
 
 	right := lipgloss.JoinVertical(lipgloss.Left, params, output)
 
@@ -506,9 +544,8 @@ func (m model) paramLines() int {
 }
 
 func (m *model) resizeViewports() {
-	paneFrameH := paneStyle.GetHorizontalFrameSize()
 	paneFrameV := paneStyle.GetVerticalFrameSize()
-	viewportW := max(2, m.rightWidth()-paneFrameH)
+	viewportW := max(2, m.rightWidth())
 
 	// Calculate viewport heights based on available space
 	paramLines := m.paramLines()
@@ -516,9 +553,9 @@ func (m *model) resizeViewports() {
 		paramLines = 1
 	}
 	paramPaneContent := paramLines + 1 // +1 for title line
-	// Overhead: 2 pane borders (params + output) + 1 tab bar line
+	// Overhead: params pane border + 3 tab bar lines + 1 newline
 	// (the params title is already counted in paramPaneContent)
-	totalOverhead := 2*paneFrameV + 1
+	totalOverhead := paneFrameV + 4
 	remaining := m.height - 2 - paramPaneContent - totalOverhead
 
 	outputVH := max(3, remaining)
@@ -534,8 +571,7 @@ func (m *model) resizeViewports() {
 // While a step is running we render raw stdout/stderr so the user sees live
 // output. After it finishes, we render markdown via glamour.
 func (m *model) refreshStdoutContent() {
-	paneFrameH := paneStyle.GetHorizontalFrameSize()
-	normalWidth := max(2, m.rightWidth()-paneFrameH)
+	normalWidth := max(2, m.rightWidth())
 	stdoutStr := string(m.stdoutBuffer)
 
 	if m.workflow == nil || m.cursor >= len(m.workflow.Steps) {
@@ -667,15 +703,20 @@ func (m model) runTypeIcon(step Step) string {
 	return "↻"
 }
 
-func (m model) renderOutputTabs() string {
-	stdoutStyle := tabInactiveStyle
-	stderrStyle := tabInactiveStyle
+func (m model) renderOutputTabs(w int) string {
+	var stdoutTab, stderrTab string
 	if m.outputTab == 0 {
-		stdoutStyle = tabActiveStyle
+		stdoutTab = tabActive.Render("Stdout")
+		stderrTab = tabInactive.Render("Stderr")
 	} else {
-		stderrStyle = tabActiveStyle
+		stdoutTab = tabInactive.Render("Stdout")
+		stderrTab = tabActive.Render("Stderr")
 	}
-	return stdoutStyle.Render("Stdout") + " " + stderrStyle.Render("Stderr")
+
+	row := lipgloss.JoinHorizontal(lipgloss.Top, stdoutTab, stderrTab)
+	gapWidth := max(0, w-lipgloss.Width(row))
+	gap := tabGap.Render(strings.Repeat(" ", gapWidth))
+	return lipgloss.JoinHorizontal(lipgloss.Bottom, row, gap)
 }
 
 func (m model) renderParamContent(w int) string {
