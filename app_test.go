@@ -29,7 +29,10 @@ func TestSessionLoadSave(t *testing.T) {
 		t.Fatalf("Failed to load workflow: %v", err)
 	}
 
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get working directory: %v", err)
+	}
 	sess := NewSession(wf, cwd)
 	sess.SetParameterValue("env", "staging")
 	sess.SetParameterValue("version", "2.0.0")
@@ -69,8 +72,14 @@ func TestResolveScriptPath(t *testing.T) {
 }
 
 func TestStepSequencing(t *testing.T) {
-	wf, _ := LoadWorkflow("examples/deploy.json")
-	cwd, _ := os.Getwd()
+	wf, err := LoadWorkflow("examples/deploy.json")
+	if err != nil {
+		t.Fatalf("Failed to load workflow: %v", err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get working directory: %v", err)
+	}
 	sess := NewSession(wf, cwd)
 
 	if !sess.IsStepRunnable(wf, 0) {
@@ -90,9 +99,15 @@ func TestStepSequencing(t *testing.T) {
 }
 
 func TestRunOncePerSession(t *testing.T) {
-	wf, _ := LoadWorkflow("examples/deploy.json")
+	wf, err := LoadWorkflow("examples/deploy.json")
+	if err != nil {
+		t.Fatalf("Failed to load workflow: %v", err)
+	}
 	wf.Steps[0].RunOncePerSession = true
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get working directory: %v", err)
+	}
 	sess := NewSession(wf, cwd)
 
 	if !sess.IsStepRunnable(wf, 0) {
@@ -106,12 +121,38 @@ func TestRunOncePerSession(t *testing.T) {
 	}
 }
 
+func TestRunOncePerSessionSkipped(t *testing.T) {
+	wf, err := LoadWorkflow("examples/deploy.json")
+	if err != nil {
+		t.Fatalf("Failed to load workflow: %v", err)
+	}
+	wf.Steps[0].RunOncePerSession = true
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get working directory: %v", err)
+	}
+	sess := NewSession(wf, cwd)
+
+	if !sess.IsStepRunnable(wf, 0) {
+		t.Error("Step 0 should be runnable initially")
+	}
+
+	sess.UpdateStepState(wf.Steps[0].ID, StepState{Status: StatusSkipped})
+
+	if sess.IsStepRunnable(wf, 0) {
+		t.Error("Step 0 should not be runnable after being skipped with run_once_per_session")
+	}
+}
+
 func TestViewRendersSteps(t *testing.T) {
 	wf, err := LoadWorkflow("examples/deploy.json")
 	if err != nil {
 		t.Fatalf("Failed to load workflow: %v", err)
 	}
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get working directory: %v", err)
+	}
 	sess := NewSession(wf, cwd)
 	m := initialModel(wf, sess, "examples")
 	m.width = 100
@@ -144,7 +185,10 @@ func TestViewRendersStepsSmallTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to load workflow: %v", err)
 	}
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get working directory: %v", err)
+	}
 	sess := NewSession(wf, cwd)
 	m := initialModel(wf, sess, "examples")
 	m.width = 50
@@ -165,7 +209,10 @@ func TestViewSmallTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to load workflow: %v", err)
 	}
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get working directory: %v", err)
+	}
 	sess := NewSession(wf, cwd)
 	m := initialModel(wf, sess, "examples")
 	m.width = 40
@@ -183,7 +230,10 @@ func TestViewDebug(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to load workflow: %v", err)
 	}
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get working directory: %v", err)
+	}
 	sess := NewSession(wf, cwd)
 	m := initialModel(wf, sess, "examples")
 	m.width = 100
@@ -205,5 +255,59 @@ func TestViewDebug(t *testing.T) {
 	}
 	if !strings.Contains(view.Content, "Stderr") {
 		t.Fatalf("View missing 'Stderr' label:\n%s", view.Content)
+	}
+}
+
+func TestMarkdownRendering(t *testing.T) {
+	wf, err := LoadWorkflow("examples/deploy.json")
+	if err != nil {
+		t.Fatalf("Failed to load workflow: %v", err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get working directory: %v", err)
+	}
+	sess := NewSession(wf, cwd)
+	m := initialModel(wf, sess, "examples")
+	m.width = 100
+	m.height = 30
+	m.resizeViewports()
+
+	rendered, err := m.renderMarkdown("# Hello\n\nWorld", 80)
+	if err != nil {
+		t.Fatalf("renderMarkdown failed: %v", err)
+	}
+	if rendered == "" {
+		t.Fatal("renderMarkdown returned empty string")
+	}
+	if !strings.Contains(rendered, "Hello") {
+		t.Errorf("rendered markdown should contain 'Hello', got:\n%s", rendered)
+	}
+}
+
+func TestWorkflowValidationUnknownOutputType(t *testing.T) {
+	wf := Workflow{
+		Name: "test",
+		Steps: []Step{
+			{ID: "s1", Name: "Step 1", Script: "foo.sh", OutputType: "bad"},
+		},
+	}
+	if err := wf.Validate(); err == nil {
+		t.Error("Expected validation error for unknown output_type")
+	}
+}
+
+func TestWorkflowValidationDuplicateParam(t *testing.T) {
+	wf := Workflow{
+		Name: "test",
+		Parameters: map[string]Parameter{
+			"env": {Type: ParamString},
+		},
+		Steps: []Step{
+			{ID: "s1", Name: "Step 1", Script: "foo.sh", Params: []string{"env", "env"}},
+		},
+	}
+	if err := wf.Validate(); err == nil {
+		t.Error("Expected validation error for duplicate parameter")
 	}
 }

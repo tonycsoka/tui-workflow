@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -253,5 +254,52 @@ func TestRunnerLongLine(t *testing.T) {
 	}
 	if len(line) != len(longLine)+1 {
 		t.Errorf("expected line length %d, got %d", len(longLine)+1, len(line))
+	}
+}
+
+func TestRunnerScannerOverflow(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping shell runner tests on windows")
+	}
+
+	script := filepath.Join(t.TempDir(), "script.sh")
+	// Create a line slightly longer than the 1MB scanner buffer
+	longLine := make([]byte, 1024*1024+100)
+	for i := range longLine {
+		longLine[i] = 'x'
+	}
+	content := "#!/bin/sh\nprintf '%s\n' '" + string(longLine) + "'\nexit 0\n"
+	if err := os.WriteFile(script, []byte(content), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	step := Step{ID: "overflow", Script: script}
+	runner := newStepRunner(step, filepath.Dir(script), script, nil)
+
+	var gotScannerError bool
+	var done *shellDoneMsg
+	for done == nil {
+		cmd := runner.NextCmd()
+		if cmd == nil {
+			t.Fatal("NextCmd returned nil unexpectedly")
+		}
+		msg := cmd()
+		switch m := msg.(type) {
+		case shellStderrMsg:
+			if strings.Contains(m.line, "scanner error") {
+				gotScannerError = true
+			}
+		case shellDoneMsg:
+			done = &m
+		default:
+			// ignore stdout
+		}
+	}
+
+	if done == nil || done.status != StatusSuccess {
+		t.Fatalf("expected success, got %v", done)
+	}
+	if !gotScannerError {
+		t.Error("expected scanner error message for oversized line")
 	}
 }
