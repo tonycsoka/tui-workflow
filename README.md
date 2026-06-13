@@ -17,7 +17,23 @@ A JSON-driven terminal UI for running sequenced, parameterised shell workflows.
 
 ## Installation
 
+### From GitHub (latest)
+
 ```bash
+go install github.com/yourusername/tui-workflow@latest
+```
+
+Then run it directly:
+
+```bash
+tui-workflow <workflow.json>
+```
+
+### From source
+
+```bash
+git clone https://github.com/yourusername/tui-workflow.git
+cd tui-workflow
 go build .
 ```
 
