@@ -30,7 +30,6 @@ var (
 	paramLabelStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("241"))
 	paramUsedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("86")).Bold(true)
 	paramUnusedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	modalStyle       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(1).Width(50).Align(lipgloss.Center)
 	titleStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")).Background(lipgloss.Color("235")).Padding(0, 1)
 	sessionStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Background(lipgloss.Color("235")).Padding(0, 1)
 )
@@ -51,7 +50,7 @@ type model struct {
 	width  int
 	height int
 
-	bypassConfirm   bool
+	skipConfirm     bool
 	showSessionList bool
 	sessionList     []*Session
 	sessionCursor   int
@@ -143,13 +142,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stderrViewport.GotoBottom()
 
 	case tea.KeyMsg:
-		if m.bypassConfirm {
+		if m.skipConfirm {
 			switch msg.String() {
 			case "y", "Y":
-				m.confirmBypass()
+				m.skipCurrentStep()
+				m.skipConfirm = false
 				return m, m.autoSave()
 			case "n", "N", "q", "esc":
-				m.bypassConfirm = false
+				m.skipConfirm = false
 				return m, nil
 			}
 			return m, nil
@@ -240,14 +240,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.canRun() {
 				return m, m.runCurrentStep()
 			}
-		case "b":
-			if m.canBypass() {
-				m.bypassConfirm = true
-			}
-		case "n":
+		case "d":
 			if m.canSkip() {
-				m.skipCurrentStep()
-				return m, m.autoSave()
+				m.skipConfirm = true
 			}
 		case "s":
 			m.showSessionList = true
@@ -291,8 +286,8 @@ func (m model) View() tea.View {
 		return v
 	}
 
-	if m.bypassConfirm {
-		v := tea.NewView(m.renderBypassModal())
+	if m.skipConfirm {
+		v := tea.NewView(m.renderSkipConfirm())
 		v.AltScreen = true
 		return v
 	}
@@ -342,7 +337,7 @@ func (m model) View() tea.View {
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 	footer := lipgloss.NewStyle().Height(1).Render(
-		"↑/↓ nav  r run  b skip  n skip  tab params  s sessions  pgup/pgdn scroll  q quit",
+		"↑/↓ nav  r run  d skip  tab params  s sessions  pgup/pgdn scroll  q quit",
 	)
 
 	all := lipgloss.JoinVertical(lipgloss.Left, titleBar, body, footer)
@@ -593,13 +588,6 @@ func (m model) renderParamContent(w int) string {
 	return strings.Join(lines, "\n")
 }
 
-func (m model) renderBypassModal() string {
-	step := m.workflow.Steps[m.cursor]
-	msg := fmt.Sprintf("Skip failed step %q?\n\n(y/n)", step.Name)
-	overlay := modalStyle.Render(msg)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
-}
-
 func (m model) renderSessionList() string {
 	var lines []string
 	lines = append(lines, paneTitleStyle.Render("Sessions for this workflow"), "")
@@ -644,16 +632,15 @@ func (m model) renderSessionList() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
 }
 
-// --- Logic ---
-
-func (m *model) confirmBypass() {
-	if m.workflow == nil || m.session == nil {
-		return
-	}
+func (m model) renderSkipConfirm() string {
 	step := m.workflow.Steps[m.cursor]
-	m.session.UpdateStepState(step.ID, StepState{Status: StatusSkipped})
-	m.bypassConfirm = false
+	msg := fmt.Sprintf("Skip step %q?\n\n(y/n)", step.Name)
+	modalStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(1).Width(50).Align(lipgloss.Center)
+	overlay := modalStyle.Render(msg)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
 }
+
+// --- Logic ---
 
 func (m *model) skipCurrentStep() {
 	if m.workflow == nil || m.session == nil {
@@ -741,13 +728,6 @@ func (m model) canRun() bool {
 		return false
 	}
 	return m.session.IsStepRunnable(m.workflow, m.cursor)
-}
-
-func (m model) canBypass() bool {
-	if m.workflow == nil || m.session == nil {
-		return false
-	}
-	return m.session.IsStepBypassable(m.workflow, m.cursor)
 }
 
 func (m model) canSkip() bool {
