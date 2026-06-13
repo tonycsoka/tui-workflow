@@ -5,6 +5,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
@@ -85,7 +86,8 @@ type model struct {
 
 	liveOutputs map[string]liveOutput // per-step buffers for running steps
 
-	saveErr string // transient error from autoSave
+	savePending bool // debounce flag for autoSave
+	saveErr    string // transient error from autoSave
 }
 
 func initialModel(wf *Workflow, session *Session, workflowDir string) model {
@@ -112,6 +114,7 @@ func (m model) Init() tea.Cmd {
 }
 
 type errMsg struct{ err error }
+type saveTimerMsg struct{}
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -186,6 +189,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case errMsg:
 		m.saveErr = msg.err.Error()
+
+	case saveTimerMsg:
+		m.savePending = false
+		if m.session != nil {
+			if err := SaveSession(m.session); err != nil {
+				return m, func() tea.Msg { return errMsg{err} }
+			}
+		}
+		return m, nil
 
 	case tea.KeyMsg:
 		if m.saveErr != "" {
@@ -686,6 +698,9 @@ func (m model) renderSessionList() string {
 }
 
 func (m model) renderSkipConfirm() string {
+	if m.workflow == nil || m.cursor < 0 || m.cursor >= len(m.workflow.Steps) {
+		return ""
+	}
 	step := m.workflow.Steps[m.cursor]
 	var lines []string
 	lines = append(lines, paneTitleStyle.Render("Skip Step"), "")
@@ -703,7 +718,7 @@ func (m model) renderSkipConfirm() string {
 // --- Logic ---
 
 func (m *model) skipCurrentStep() {
-	if m.workflow == nil || m.session == nil {
+	if m.workflow == nil || m.session == nil || m.cursor < 0 || m.cursor >= len(m.workflow.Steps) {
 		return
 	}
 	step := m.workflow.Steps[m.cursor]
@@ -737,9 +752,9 @@ func (m *model) loadStepOutput() {
 		m.stderrBuffer = []byte(state.Stderr)
 		// Backward compat: if new fields are empty, try old Output field
 		if m.stdoutBuffer == nil && m.stderrBuffer == nil && state.Output != "" {
-			out, err := state.GetOutput()
+			out, stderr := state.GetOutput()
 			m.stdoutBuffer = []byte(out)
-			m.stderrBuffer = []byte(err)
+			m.stderrBuffer = []byte(stderr)
 		}
 	}
 	m.refreshStdoutContent()
@@ -813,7 +828,7 @@ func (m model) canRun() bool {
 }
 
 func (m model) canSkip() bool {
-	if m.workflow == nil || m.session == nil {
+	if m.workflow == nil || m.session == nil || m.cursor < 0 || m.cursor >= len(m.workflow.Steps) {
 		return false
 	}
 	step := m.workflow.Steps[m.cursor]
@@ -869,15 +884,13 @@ func (m *model) blurAllExcept(idx int) tea.Cmd {
 }
 
 func (m *model) autoSave() tea.Cmd {
-	if m.session == nil {
+	if m.session == nil || m.savePending {
 		return nil
 	}
-	return func() tea.Msg {
-		if err := SaveSession(m.session); err != nil {
-			return errMsg{err}
-		}
-		return nil
-	}
+	m.savePending = true
+	return tea.Tick(200*time.Millisecond, func(t time.Time) tea.Msg {
+		return saveTimerMsg{}
+	})
 }
 
 func (m *model) runCurrentStep() tea.Cmd {
@@ -901,6 +914,6 @@ func (m *model) runCurrentStep() tea.Cmd {
 	m.currentStepID = step.ID
 
 	params := buildParams(step, m)
-	m.runner = newStepRunner(step, m.workflowDir, params)
+	m.runner = newStepRunner(step, m.workflowDir, scriptPath, params)
 	return tea.Batch(m.autoSave(), m.runner.NextCmd())
 }

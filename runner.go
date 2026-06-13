@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"os/exec"
 	"sync"
 
@@ -33,13 +34,12 @@ type stepRunner struct {
 	cancel     context.CancelFunc
 }
 
-func newStepRunner(step Step, workflowDir string, params []string) *stepRunner {
+func newStepRunner(step Step, workflowDir string, scriptPath string, params []string) *stepRunner {
 	ctx, cancel := context.WithCancel(context.Background())
 	stdoutChan := make(chan string, 1000)
 	stderrChan := make(chan string, 1000)
 	resultChan := make(chan shellDoneMsg, 1)
 
-	scriptPath := ResolveScriptPath(workflowDir, step.Script)
 	cmd := exec.CommandContext(ctx, scriptPath, params...)
 	cmd.Dir = workflowDir
 
@@ -73,6 +73,9 @@ func newStepRunner(step Step, workflowDir string, params []string) *stepRunner {
 			for scanner.Scan() {
 				stdoutChan <- scanner.Text() + "\n"
 			}
+			if err := scanner.Err(); err != nil {
+				stderrChan <- fmt.Sprintf("stdout scanner error: %v\n", err)
+			}
 		}()
 
 		go func() {
@@ -82,6 +85,9 @@ func newStepRunner(step Step, workflowDir string, params []string) *stepRunner {
 			scanner.Buffer(buf, cap(buf))
 			for scanner.Scan() {
 				stderrChan <- scanner.Text() + "\n"
+			}
+			if err := scanner.Err(); err != nil {
+				stderrChan <- fmt.Sprintf("stderr scanner error: %v\n", err)
 			}
 		}()
 

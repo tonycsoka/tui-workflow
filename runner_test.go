@@ -19,7 +19,7 @@ func TestRunnerBasicOutput(t *testing.T) {
 	}
 
 	step := Step{ID: "test", Script: script}
-	runner := newStepRunner(step, filepath.Dir(script), nil)
+	runner := newStepRunner(step, filepath.Dir(script), script, nil)
 
 	var gotStdout []string
 	var gotStderr []string
@@ -71,7 +71,7 @@ func TestRunnerExitFailure(t *testing.T) {
 	}
 
 	step := Step{ID: "fail", Script: script}
-	runner := newStepRunner(step, filepath.Dir(script), nil)
+	runner := newStepRunner(step, filepath.Dir(script), script, nil)
 
 	var done *shellDoneMsg
 	for done == nil {
@@ -109,7 +109,7 @@ func TestRunnerDrain(t *testing.T) {
 	}
 
 	step := Step{ID: "drain", Script: script}
-	runner := newStepRunner(step, filepath.Dir(script), nil)
+	runner := newStepRunner(step, filepath.Dir(script), script, nil)
 
 	// Consume the first stdout message
 	cmd := runner.NextCmd()
@@ -139,7 +139,7 @@ func TestRunnerStop(t *testing.T) {
 	}
 
 	step := Step{ID: "stop", Script: script}
-	runner := newStepRunner(step, filepath.Dir(script), nil)
+	runner := newStepRunner(step, filepath.Dir(script), script, nil)
 
 	// Give the goroutine a moment to start
 	time.Sleep(50 * time.Millisecond)
@@ -180,7 +180,7 @@ func TestRunnerManyLines(t *testing.T) {
 	}
 
 	step := Step{ID: "many", Script: script}
-	runner := newStepRunner(step, filepath.Dir(script), nil)
+	runner := newStepRunner(step, filepath.Dir(script), script, nil)
 
 	var count int
 	var done *shellDoneMsg
@@ -226,7 +226,7 @@ func TestRunnerLongLine(t *testing.T) {
 	}
 
 	step := Step{ID: "long", Script: script}
-	runner := newStepRunner(step, filepath.Dir(script), nil)
+	runner := newStepRunner(step, filepath.Dir(script), script, nil)
 
 	var line string
 	var done *shellDoneMsg
