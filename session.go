@@ -28,6 +28,8 @@ type StepState struct {
 	Status   StepStatus `json:"status"`
 	ExitCode int        `json:"exit_code,omitempty"`
 	RunAt    string     `json:"run_at,omitempty"`
+	// Output is deprecated. Use Stdout and Stderr instead.
+	// Kept for backward compatibility with sessions created before the split.
 	Output   string     `json:"output,omitempty"`
 	Stdout   string     `json:"stdout,omitempty"`
 	Stderr   string     `json:"stderr,omitempty"`

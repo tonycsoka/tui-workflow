@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"os/exec"
 	"sync"
 
@@ -29,17 +30,21 @@ type stepRunner struct {
 	stderrChan chan string
 	resultChan chan shellDoneMsg
 	stepID     string
+	cancel     context.CancelFunc
 }
 
 func newStepRunner(step Step, workflowDir string, params []string) *stepRunner {
-	stdoutChan := make(chan string, 100)
-	stderrChan := make(chan string, 100)
-	resultChan := make(chan shellDoneMsg)
+	ctx, cancel := context.WithCancel(context.Background())
+	stdoutChan := make(chan string, 1000)
+	stderrChan := make(chan string, 1000)
+	resultChan := make(chan shellDoneMsg, 1)
+
+	scriptPath := ResolveScriptPath(workflowDir, step.Script)
+	cmd := exec.CommandContext(ctx, scriptPath, params...)
+	cmd.Dir = workflowDir
 
 	go func() {
-		scriptPath := ResolveScriptPath(workflowDir, step.Script)
-		cmd := exec.Command(scriptPath, params...)
-		cmd.Dir = workflowDir
+		defer cancel()
 
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
@@ -63,6 +68,8 @@ func newStepRunner(step Step, workflowDir string, params []string) *stepRunner {
 		go func() {
 			defer wg.Done()
 			scanner := bufio.NewScanner(stdout)
+			buf := make([]byte, 1024*1024)
+			scanner.Buffer(buf, cap(buf))
 			for scanner.Scan() {
 				stdoutChan <- scanner.Text() + "\n"
 			}
@@ -71,6 +78,8 @@ func newStepRunner(step Step, workflowDir string, params []string) *stepRunner {
 		go func() {
 			defer wg.Done()
 			scanner := bufio.NewScanner(stderr)
+			buf := make([]byte, 1024*1024)
+			scanner.Buffer(buf, cap(buf))
 			for scanner.Scan() {
 				stderrChan <- scanner.Text() + "\n"
 			}
@@ -94,6 +103,7 @@ func newStepRunner(step Step, workflowDir string, params []string) *stepRunner {
 		stderrChan: stderrChan,
 		resultChan: resultChan,
 		stepID:     step.ID,
+		cancel:     cancel,
 	}
 }
 
@@ -113,29 +123,33 @@ func (r *stepRunner) NextCmd() tea.Cmd {
 	}
 }
 
+// Stop cancels the runner's context, killing the underlying process.
+func (r *stepRunner) Stop() {
+	if r != nil && r.cancel != nil {
+		r.cancel()
+	}
+}
+
 // Drain returns any remaining output in the buffers without blocking.
 func (r *stepRunner) Drain() (stdout, stderr []string) {
 	if r == nil {
 		return nil, nil
 	}
+	return drainChan(r.stdoutChan), drainChan(r.stderrChan)
+}
+
+func drainChan(ch chan string) []string {
+	var lines []string
 	for {
 		select {
-		case line := <-r.stdoutChan:
-			stdout = append(stdout, line)
+		case line := <-ch:
+			lines = append(lines, line)
 		default:
-			goto drainStderr
-		}
-	}
-drainStderr:
-	for {
-		select {
-		case line := <-r.stderrChan:
-			stderr = append(stderr, line)
-		default:
-			return stdout, stderr
+			return lines
 		}
 	}
 }
+
 
 func buildParams(step Step, m *model) []string {
 	var params []string

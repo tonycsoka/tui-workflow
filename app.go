@@ -34,6 +34,29 @@ var (
 	sessionStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Background(lipgloss.Color("235")).Padding(0, 1)
 )
 
+// Layout constants for the TUI.
+const (
+	leftPaneMaxWidth   = 45
+	leftPaneMinWidth   = 15
+	rightPaneMinWidth  = 10
+	stepsPaneMinHeight = 3
+	infoPaneHeight     = 2
+	paramBlockHeight   = 3 // label + input + spacing
+	modalMaxWidth      = 60
+	modalSkipWidth     = 50
+	stepsPaneOverhead  = 10 // titleBar + footer + borders + padding rough estimate
+	cursorBgColor      = "236"
+	lastRunFgColor     = "244"
+)
+
+// liveOutput holds the raw stdout/stderr for a step that is currently running.
+// This decouples the live stream from the currently selected step so the user
+// can navigate away without losing the running step's output.
+type liveOutput struct {
+	stdout []byte
+	stderr []byte
+}
+
 type model struct {
 	workflow     *Workflow
 	session      *Session
@@ -59,6 +82,10 @@ type model struct {
 	currentStepID string
 	stdoutBuffer  []byte
 	stderrBuffer  []byte
+
+	liveOutputs map[string]liveOutput // per-step buffers for running steps
+
+	saveErr string // transient error from autoSave
 }
 
 func initialModel(wf *Workflow, session *Session, workflowDir string) model {
@@ -69,6 +96,7 @@ func initialModel(wf *Workflow, session *Session, workflowDir string) model {
 		paramInputs:  make(map[string]textinput.Model),
 		paramNames:   make([]string, 0, len(wf.Parameters)),
 		focusedParam: -1,
+		liveOutputs:  make(map[string]liveOutput),
 	}
 	for name := range wf.Parameters {
 		m.paramNames = append(m.paramNames, name)
@@ -79,6 +107,7 @@ func initialModel(wf *Workflow, session *Session, workflowDir string) model {
 }
 
 func (m model) Init() tea.Cmd {
+	// Init returns no commands. If async loading is needed in the future, return a tea.Cmd here.
 	return nil
 }
 
@@ -95,38 +124,57 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateParamInputWidths()
 
 	case shellStdoutMsg:
-		m.stdoutBuffer = append(m.stdoutBuffer, msg.line...)
-		m.stdoutViewport.SetContent(string(m.stdoutBuffer))
-		m.stdoutViewport.GotoBottom()
+		if m.currentStepID == msg.stepID {
+			liveOut := m.liveOutputs[msg.stepID]
+			liveOut.stdout = append(liveOut.stdout, msg.line...)
+			m.liveOutputs[msg.stepID] = liveOut
+			if m.workflow != nil && m.cursor < len(m.workflow.Steps) && m.workflow.Steps[m.cursor].ID == msg.stepID {
+				m.stdoutBuffer = liveOut.stdout
+				m.stdoutViewport.SetContent(string(m.stdoutBuffer))
+				m.stdoutViewport.GotoBottom()
+			}
+		}
 		if m.runner != nil {
 			return m, m.runner.NextCmd()
 		}
 
 	case shellStderrMsg:
-		m.stderrBuffer = append(m.stderrBuffer, msg.line...)
-		m.stderrViewport.SetContent(string(m.stderrBuffer))
-		m.stderrViewport.GotoBottom()
+		if m.currentStepID == msg.stepID {
+			liveOut := m.liveOutputs[msg.stepID]
+			liveOut.stderr = append(liveOut.stderr, msg.line...)
+			m.liveOutputs[msg.stepID] = liveOut
+			if m.workflow != nil && m.cursor < len(m.workflow.Steps) && m.workflow.Steps[m.cursor].ID == msg.stepID {
+				m.stderrBuffer = liveOut.stderr
+				m.stderrViewport.SetContent(string(m.stderrBuffer))
+				m.stderrViewport.GotoBottom()
+			}
+		}
 		if m.runner != nil {
 			return m, m.runner.NextCmd()
 		}
 
 	case shellDoneMsg:
-		// Drain any remaining stdout/stderr before saving
-		if m.runner != nil {
-			stdoutLines, stderrLines := m.runner.Drain()
-			for _, line := range stdoutLines {
-				m.stdoutBuffer = append(m.stdoutBuffer, line...)
+		if m.currentStepID == msg.stepID {
+			// Drain any remaining stdout/stderr before saving
+			if m.runner != nil {
+				stdoutLines, stderrLines := m.runner.Drain()
+				liveOut := m.liveOutputs[msg.stepID]
+				for _, line := range stdoutLines {
+					liveOut.stdout = append(liveOut.stdout, line...)
+				}
+				for _, line := range stderrLines {
+					liveOut.stderr = append(liveOut.stderr, line...)
+				}
+				m.liveOutputs[msg.stepID] = liveOut
 			}
-			for _, line := range stderrLines {
-				m.stderrBuffer = append(m.stderrBuffer, line...)
-			}
+			m.session.UpdateStepState(msg.stepID, StepState{
+				Status:   msg.status,
+				ExitCode: msg.exitCode,
+				Stdout:   string(m.liveOutputs[msg.stepID].stdout),
+				Stderr:   string(m.liveOutputs[msg.stepID].stderr),
+			})
+			delete(m.liveOutputs, msg.stepID)
 		}
-		m.session.UpdateStepState(msg.stepID, StepState{
-			Status:   msg.status,
-			ExitCode: msg.exitCode,
-			Stdout:   string(m.stdoutBuffer),
-			Stderr:   string(m.stderrBuffer),
-		})
 		m.runner = nil
 		m.currentStepID = ""
 		m.refreshStdoutContent()
@@ -137,11 +185,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.autoSave()
 
 	case errMsg:
-		m.stderrBuffer = append(m.stderrBuffer, fmt.Sprintf("\nError: %v\n", msg.err)...)
-		m.stderrViewport.SetContent(string(m.stderrBuffer))
-		m.stderrViewport.GotoBottom()
+		m.saveErr = msg.err.Error()
 
 	case tea.KeyMsg:
+		if m.saveErr != "" {
+			m.saveErr = ""
+		}
 		if m.skipConfirm {
 			switch msg.String() {
 			case "y", "Y":
@@ -220,6 +269,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case "q", "ctrl+c":
+			if m.runner != nil {
+				m.runner.Stop()
+			}
 			return m, tea.Quit
 		case "up", "k":
 			if m.cursor > 0 {
@@ -298,7 +350,7 @@ func (m model) View() tea.View {
 	rightW := m.rightWidth()
 
 	leftContentW := max(2, leftW-leftPaneStyle.GetHorizontalFrameSize())
-	stepsContentH := max(3, m.height-10)
+	stepsContentH := max(stepsPaneMinHeight, m.height-stepsPaneOverhead)
 	infoContentH := 2
 
 	leftContentRaw := m.renderStepListContent(leftContentW)
@@ -345,36 +397,36 @@ func (m model) View() tea.View {
 
 // Cursor returns the cursor position for the focused text input.
 func (m model) Cursor() *tea.Cursor {
-	if m.focusedParam >= 0 && m.focusedParam < len(m.paramNames) {
-		name := m.paramNames[m.focusedParam]
-		input := m.paramInputs[name]
-		if input.Focused() {
-			c := input.Cursor()
-			// Find the X position of the input in the right pane
-			leftW := m.leftWidth()
-			// X offset: left pane width + border
-			c.X += leftW + 1
-			// Y offset: parameters pane height + title + border + lines before input
-			paramLines := m.paramLines()
-			c.Y += paramLines + 3 + m.focusedParam*3
-			return c
-		}
+	if m.focusedParam < 0 || m.focusedParam >= len(m.paramNames) {
+		return nil
 	}
-	return nil
+	name := m.paramNames[m.focusedParam]
+	input := m.paramInputs[name]
+	if !input.Focused() {
+		return nil
+	}
+	c := input.Cursor()
+	leftW := m.leftWidth()
+	// X offset: left pane width + left border of the right pane
+	c.X += leftW + 1
+	// Y offset: titleBar(1) + params pane top border(1) + "Parameters" title(1) +
+	//           label line(1) + all previous parameters (paramBlockHeight each)
+	c.Y += 1 + 1 + 1 + 1 + m.focusedParam*paramBlockHeight
+	return c
 }
 
 // --- Layout ---
 
 func (m model) leftWidth() int {
 	w := m.width / 2
-	if w > 45 {
-		w = 45
+	if w > leftPaneMaxWidth {
+		w = leftPaneMaxWidth
 	}
-	return max(w, 15)
+	return max(w, leftPaneMinWidth)
 }
 
 func (m model) rightWidth() int {
-	return max(m.width-m.leftWidth(), 10)
+	return max(m.width-m.leftWidth(), rightPaneMinWidth)
 }
 
 func (m model) leftContentW() int {
@@ -386,7 +438,7 @@ func (m model) paramLines() int {
 	if len(m.paramNames) == 0 {
 		return 1
 	}
-	return len(m.paramNames) * 3
+	return len(m.paramNames) * paramBlockHeight
 }
 
 func (m *model) resizeViewports() {
@@ -422,25 +474,34 @@ func (m *model) resizeViewports() {
 }
 
 // refreshStdoutContent sets the viewport content, rendering markdown if needed.
+// While a step is running we render raw stdout/stderr so the user sees live
+// output. After it finishes, we render markdown via glamour.
 func (m *model) refreshStdoutContent() {
 	paneFrameH := paneStyle.GetHorizontalFrameSize()
 	normalWidth := max(2, m.rightWidth()-paneFrameH)
 	stdoutStr := string(m.stdoutBuffer)
 
-	if m.workflow != nil && m.cursor < len(m.workflow.Steps) && m.currentStepID != m.workflow.Steps[m.cursor].ID {
-		step := m.workflow.Steps[m.cursor]
-		if step.OutputType == OutputMarkdown && stdoutStr != "" {
-			rendered, err := m.renderMarkdown(stdoutStr, normalWidth)
-			if err == nil {
-				stdoutStr = rendered
-			}
-			m.stdoutViewport.SetContent(stdoutStr)
-			m.stderrViewport.SetContent(string(m.stderrBuffer))
-			return
-		}
+	if m.workflow == nil || m.cursor >= len(m.workflow.Steps) {
+		m.stdoutViewport.SetWidth(normalWidth)
+		m.stdoutViewport.SetContent(stdoutStr)
+		m.stderrViewport.SetContent(string(m.stderrBuffer))
+		return
 	}
 
-	// Normal width for non-markdown content
+	step := m.workflow.Steps[m.cursor]
+	isRunningThisStep := m.currentStepID == step.ID
+
+	if !isRunningThisStep && step.OutputType == OutputMarkdown && stdoutStr != "" {
+		rendered, err := m.renderMarkdown(stdoutStr, normalWidth)
+		if err == nil {
+			stdoutStr = rendered
+		}
+		m.stdoutViewport.SetContent(stdoutStr)
+		m.stderrViewport.SetContent(string(m.stderrBuffer))
+		return
+	}
+
+	// Normal width for non-markdown content or while a step is running
 	m.stdoutViewport.SetWidth(normalWidth)
 	m.stdoutViewport.SetContent(stdoutStr)
 	m.stderrViewport.SetContent(string(m.stderrBuffer))
@@ -486,7 +547,7 @@ func (m model) renderStepListContent(w int) string {
 		prefix := "  "
 		if i == m.cursor {
 			prefix = "> "
-			style = style.Copy().Background(lipgloss.Color("236")).Bold(true)
+			style = style.Copy().Background(lipgloss.Color(cursorBgColor)).Bold(true)
 		}
 
 		icon := m.statusIcon(state.Status)
@@ -517,7 +578,7 @@ func (m model) renderStepInfo(w int) string {
 	}
 
 	descLine := lipgloss.NewStyle().MaxWidth(w).Render(desc)
-	runLine := lipgloss.NewStyle().Foreground(lipgloss.Color("244")).MaxWidth(w).Render("Last run: " + lastRun)
+	runLine := lipgloss.NewStyle().Foreground(lipgloss.Color(lastRunFgColor)).MaxWidth(w).Render("Last run: " + lastRun)
 	return descLine + "\n" + runLine
 }
 
@@ -620,7 +681,7 @@ func (m model) renderSessionList() string {
 	}
 	lines = append(lines, "", "enter pick  n new  q/esc close")
 
-	modalW := min(60, m.width-4)
+	modalW := min(modalMaxWidth, m.width-4)
 	modalH := min(m.height-4, len(lines)+2)
 	contentW := max(2, modalW-leftPaneStyle.GetHorizontalFrameSize())
 	contentH := max(1, modalH-leftPaneStyle.GetVerticalFrameSize())
@@ -632,7 +693,7 @@ func (m model) renderSessionList() string {
 func (m model) renderSkipConfirm() string {
 	step := m.workflow.Steps[m.cursor]
 	msg := fmt.Sprintf("Skip step %q?\n\n(y/n)", step.Name)
-	modalStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(1).Width(50).Align(lipgloss.Center)
+	modalStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(1).Width(modalSkipWidth).Align(lipgloss.Center)
 	overlay := modalStyle.Render(msg)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
 }
@@ -648,6 +709,9 @@ func (m *model) skipCurrentStep() {
 }
 
 // loadStepOutput populates the stdout/stderr buffers from the currently selected step.
+// If the step is currently running, it loads from the live output buffer instead of
+// the persisted session state so the user can navigate away and back without losing
+// the live stream.
 func (m *model) loadStepOutput() {
 	if m.workflow == nil || m.session == nil || m.cursor >= len(m.workflow.Steps) {
 		m.stdoutBuffer = nil
@@ -657,14 +721,24 @@ func (m *model) loadStepOutput() {
 		return
 	}
 	step := m.workflow.Steps[m.cursor]
-	state := m.session.StepStates[step.ID]
-	m.stdoutBuffer = []byte(state.Stdout)
-	m.stderrBuffer = []byte(state.Stderr)
-	// Backward compat: if new fields are empty, try old Output field
-	if m.stdoutBuffer == nil && m.stderrBuffer == nil && state.Output != "" {
-		out, err := state.GetOutput()
-		m.stdoutBuffer = []byte(out)
-		m.stderrBuffer = []byte(err)
+	if m.currentStepID == step.ID {
+		if liveOut, ok := m.liveOutputs[step.ID]; ok {
+			m.stdoutBuffer = liveOut.stdout
+			m.stderrBuffer = liveOut.stderr
+		} else {
+			m.stdoutBuffer = nil
+			m.stderrBuffer = nil
+		}
+	} else {
+		state := m.session.StepStates[step.ID]
+		m.stdoutBuffer = []byte(state.Stdout)
+		m.stderrBuffer = []byte(state.Stderr)
+		// Backward compat: if new fields are empty, try old Output field
+		if m.stdoutBuffer == nil && m.stderrBuffer == nil && state.Output != "" {
+			out, err := state.GetOutput()
+			m.stdoutBuffer = []byte(out)
+			m.stderrBuffer = []byte(err)
+		}
 	}
 	m.refreshStdoutContent()
 	// For markdown, scroll to top so the beginning of the document is visible
@@ -686,7 +760,11 @@ func (m model) renderMarkdown(content string, width int) (string, error) {
 }
 
 // renderViewportContent returns the visible lines of a viewport without
-// applying the viewport's MaxWidth truncation (which is not ANSI-aware).
+// applying the viewport's MaxWidth truncation.
+//
+// We bypass viewport.View() for markdown because lipgloss's MaxWidth
+// truncation is not ANSI-aware; glamour already word-wraps at the correct
+// width, so we manually slice the visible lines to avoid stripping ANSI codes.
 func (m model) renderViewportContent(vp viewport.Model) string {
 	lines := strings.Split(vp.GetContent(), "\n")
 	yOffset := vp.YOffset()
@@ -715,6 +793,11 @@ func (m model) renderTitle() string {
 		parts = append(parts, sessionStyle.Render(wfDesc))
 	}
 	parts = append(parts, sessionStyle.Render("["+sessionName+"]"))
+
+	if m.saveErr != "" {
+		errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
+		parts = append(parts, errStyle.Render("⚠ "+m.saveErr))
+	}
 
 	title := lipgloss.JoinHorizontal(lipgloss.Center, parts...)
 	return lipgloss.NewStyle().Width(m.width).Render(title)
@@ -812,6 +895,7 @@ func (m *model) runCurrentStep() tea.Cmd {
 	m.stderrBuffer = nil
 	m.stdoutViewport.SetContent("")
 	m.stderrViewport.SetContent("")
+	m.liveOutputs[step.ID] = liveOutput{}
 	m.currentStepID = step.ID
 
 	params := buildParams(step, m)
