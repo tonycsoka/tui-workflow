@@ -15,11 +15,11 @@ import (
 
 var (
 	// Step state styles (no padding here — leftPaneStyle handles it)
-	stepPendingStyle  = lipgloss.NewStyle()
-	stepRunningStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Bold(true)
-	stepSuccessStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	stepFailedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	stepSkippedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Strikethrough(true)
+	stepPendingStyle = lipgloss.NewStyle()
+	stepRunningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Bold(true)
+	stepSuccessStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	stepFailedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	stepSkippedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Strikethrough(true)
 
 	// Pane styles
 	leftPaneStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(1)
@@ -58,9 +58,9 @@ type liveOutput struct {
 }
 
 type model struct {
-	workflow     *Workflow
-	session      *Session
-	workflowDir  string
+	workflow    *Workflow
+	session     *Session
+	workflowDir string
 
 	cursor       int
 	paramInputs  map[string]textinput.Model
@@ -577,8 +577,8 @@ func (m model) renderStepInfo(w int) string {
 		lastRun = state.RunAt
 	}
 
-	descLine := lipgloss.NewStyle().MaxWidth(w).Render(desc)
-	runLine := lipgloss.NewStyle().Foreground(lipgloss.Color(lastRunFgColor)).MaxWidth(w).Render("Last run: " + lastRun)
+	descLine := lipgloss.NewStyle().Render(desc)
+	runLine := lipgloss.NewStyle().Foreground(lipgloss.Color(lastRunFgColor)).Render("Last run: " + lastRun)
 	return descLine + "\n" + runLine
 }
 
