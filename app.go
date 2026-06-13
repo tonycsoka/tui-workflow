@@ -90,6 +90,7 @@ type model struct {
 	mdRendererCache map[int]*glamour.TermRenderer // cached glamour renderers per width
 	mdViewportLines []string                      // cached split of markdown content
 
+	autoRun     bool // chain auto-run mode active
 	savePending bool // debounce flag for autoSave
 	saveErr    string // transient error from autoSave
 }
@@ -179,6 +180,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// For markdown output, scroll to top so the user sees the beginning
 		if m.workflow != nil && m.cursor < len(m.workflow.Steps) && m.workflow.Steps[m.cursor].OutputType == OutputMarkdown {
 			m.stdoutViewport.SetYOffset(0)
+		}
+		// Auto-run chain: if active and step succeeded, try to run the next auto-run step
+		if m.autoRun {
+			if msg.status == StatusSuccess {
+				if m.workflow != nil && m.cursor < len(m.workflow.Steps)-1 {
+					m.cursor++
+					m.loadStepOutput()
+					if m.canRun() && m.workflow.Steps[m.cursor].AutoRun {
+						return m, m.runCurrentStep()
+					}
+				}
+			}
+			m.autoRun = false
 		}
 		return m, m.autoSave()
 
@@ -310,6 +324,11 @@ func (m model) handleKeyMsg(msg tea.KeyMsg) (model, tea.Cmd) {
 		if m.canRun() {
 			return m, m.runCurrentStep()
 		}
+	case "R":
+		if m.canRun() {
+			m.autoRun = true
+			return m, m.runCurrentStep()
+		}
 	case "d":
 		if m.canSkip() {
 			m.skipConfirm = true
@@ -402,7 +421,7 @@ func (m model) View() tea.View {
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 	footer := lipgloss.NewStyle().Height(1).Render(
-		"↑/↓ nav  r run  d skip  tab params  s sessions  pgup/pgdn scroll  q quit",
+		"↑/↓ nav  r run  R auto-run  d skip  tab params  s sessions  pgup/pgdn scroll  q quit",
 	)
 
 	all := lipgloss.JoinVertical(lipgloss.Left, titleBar, body, footer)
@@ -616,6 +635,9 @@ func (m model) statusIcon(status StepStatus) string {
 }
 
 func (m model) runTypeIcon(step Step) string {
+	if step.AutoRun {
+		return "⏵"
+	}
 	if step.RunOncePerSession {
 		return "⊘"
 	}

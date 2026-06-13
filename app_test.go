@@ -311,3 +311,201 @@ func TestWorkflowValidationDuplicateParam(t *testing.T) {
 		t.Error("Expected validation error for duplicate parameter")
 	}
 }
+
+func TestLoadWorkflowWithAutoRun(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "auto_run.json")
+	content := `{
+		"name": "auto-run-test",
+		"steps": [
+			{"id": "s1", "name": "Step 1", "script": "a.sh", "auto_run": true},
+			{"id": "s2", "name": "Step 2", "script": "b.sh", "auto_run": false},
+			{"id": "s3", "name": "Step 3", "script": "c.sh"}
+		]
+	}`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	wf, err := LoadWorkflow(path)
+	if err != nil {
+		t.Fatalf("Failed to load workflow: %v", err)
+	}
+	if len(wf.Steps) != 3 {
+		t.Fatalf("Expected 3 steps, got %d", len(wf.Steps))
+	}
+	if !wf.Steps[0].AutoRun {
+		t.Error("Expected step 0 auto_run=true")
+	}
+	if wf.Steps[1].AutoRun {
+		t.Error("Expected step 1 auto_run=false")
+	}
+	if wf.Steps[2].AutoRun {
+		t.Error("Expected step 2 auto_run=false (default)")
+	}
+}
+
+func TestAutoRunChain(t *testing.T) {
+	if os.Getenv("SKIP_SHELL_TESTS") != "" {
+		t.Skip("skipping shell-based auto-run chain test")
+	}
+
+	cwd := t.TempDir()
+	script1 := filepath.Join(cwd, "step1.sh")
+	script2 := filepath.Join(cwd, "step2.sh")
+	if err := os.WriteFile(script1, []byte("#!/bin/sh\necho step1\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(script2, []byte("#!/bin/sh\necho step2\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	wf := Workflow{
+		Name: "test",
+		Steps: []Step{
+			{ID: "s1", Name: "Step 1", Script: "step1.sh", AutoRun: false},
+			{ID: "s2", Name: "Step 2", Script: "step2.sh", AutoRun: true},
+		},
+	}
+	sess := NewSession(&wf, cwd)
+	m := initialModel(&wf, sess, cwd)
+	m.width = 100
+	m.height = 30
+	m.resizeViewports()
+
+	// Simulate step 0 finishing while auto-run is active
+	m.autoRun = true
+	m.currentStepID = "s1"
+	m.runner = nil
+	m.liveOutputs["s1"] = &liveOutput{stdout: []byte("step1 output\n")}
+
+	newModel, _ := m.Update(shellDoneMsg{stepID: "s1", status: StatusSuccess, exitCode: 0})
+	newM := newModel.(model)
+
+	if newM.cursor != 1 {
+		t.Errorf("Expected cursor=1 after chaining, got %d", newM.cursor)
+	}
+	if !newM.autoRun {
+		t.Error("Expected autoRun=true after chaining to step 2")
+	}
+	if newM.currentStepID != "s2" {
+		t.Errorf("Expected currentStepID=s2, got %s", newM.currentStepID)
+	}
+	if sess.StepStates["s2"].Status != StatusRunning {
+		t.Errorf("Expected step 2 status=running, got %v", sess.StepStates["s2"].Status)
+	}
+}
+
+func TestAutoRunChainStops(t *testing.T) {
+	if os.Getenv("SKIP_SHELL_TESTS") != "" {
+		t.Skip("skipping shell-based auto-run chain test")
+	}
+
+	cwd := t.TempDir()
+	script1 := filepath.Join(cwd, "step1.sh")
+	script2 := filepath.Join(cwd, "step2.sh")
+	if err := os.WriteFile(script1, []byte("#!/bin/sh\necho step1\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(script2, []byte("#!/bin/sh\necho step2\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	wf := Workflow{
+		Name: "test",
+		Steps: []Step{
+			{ID: "s1", Name: "Step 1", Script: "step1.sh", AutoRun: false},
+			{ID: "s2", Name: "Step 2", Script: "step2.sh", AutoRun: false},
+		},
+	}
+	sess := NewSession(&wf, cwd)
+	m := initialModel(&wf, sess, cwd)
+	m.width = 100
+	m.height = 30
+	m.resizeViewports()
+
+	m.autoRun = true
+	m.currentStepID = "s1"
+	m.runner = nil
+	m.liveOutputs["s1"] = &liveOutput{stdout: []byte("step1 output\n")}
+
+	newModel, _ := m.Update(shellDoneMsg{stepID: "s1", status: StatusSuccess, exitCode: 0})
+	newM := newModel.(model)
+
+	if newM.cursor != 1 {
+		t.Errorf("Expected cursor=1 after advance, got %d", newM.cursor)
+	}
+	if newM.autoRun {
+		t.Error("Expected autoRun=false when next step is not auto_run")
+	}
+	if newM.currentStepID != "" {
+		t.Errorf("Expected currentStepID=\"\", got %s", newM.currentStepID)
+	}
+}
+
+func TestAutoRunChainStopsOnFailure(t *testing.T) {
+	cwd := t.TempDir()
+	script1 := filepath.Join(cwd, "step1.sh")
+	script2 := filepath.Join(cwd, "step2.sh")
+	if err := os.WriteFile(script1, []byte("#!/bin/sh\nexit 1\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(script2, []byte("#!/bin/sh\necho step2\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	wf := Workflow{
+		Name: "test",
+		Steps: []Step{
+			{ID: "s1", Name: "Step 1", Script: "step1.sh", AutoRun: false},
+			{ID: "s2", Name: "Step 2", Script: "step2.sh", AutoRun: true},
+		},
+	}
+	sess := NewSession(&wf, cwd)
+	m := initialModel(&wf, sess, cwd)
+	m.width = 100
+	m.height = 30
+	m.resizeViewports()
+
+	m.autoRun = true
+	m.currentStepID = "s1"
+	m.runner = nil
+	m.liveOutputs["s1"] = &liveOutput{stdout: []byte("step1 output\n")}
+
+	newModel, _ := m.Update(shellDoneMsg{stepID: "s1", status: StatusFailed, exitCode: 1})
+	newM := newModel.(model)
+
+	if newM.cursor != 0 {
+		t.Errorf("Expected cursor=0 after failed step, got %d", newM.cursor)
+	}
+	if newM.autoRun {
+		t.Error("Expected autoRun=false after step failure")
+	}
+	if newM.currentStepID != "" {
+		t.Errorf("Expected currentStepID=\"\", got %s", newM.currentStepID)
+	}
+}
+
+func TestAutoRunIcon(t *testing.T) {
+	wf := Workflow{
+		Name: "test",
+		Steps: []Step{
+			{ID: "s1", Name: "Step 1", Script: "foo.sh", AutoRun: true},
+			{ID: "s2", Name: "Step 2", Script: "bar.sh", AutoRun: false},
+		},
+	}
+	cwd := t.TempDir()
+	sess := NewSession(&wf, cwd)
+	m := initialModel(&wf, sess, cwd)
+	m.width = 100
+	m.height = 30
+	m.resizeViewports()
+
+	view := m.View()
+	if !strings.Contains(view.Content, "⏵") {
+		t.Errorf("View should contain auto-run icon ⏵, got:\n%s", view.Content)
+	}
+	// Verify that the non-auto-run step still shows the repeatable icon
+	if !strings.Contains(view.Content, "↻") {
+		t.Errorf("View should contain repeatable icon ↻, got:\n%s", view.Content)
+	}
+}
