@@ -318,13 +318,13 @@ func (sess *Session) IsStepRunnable(wf *Workflow, idx int) bool {
 		return false
 	}
 
-	// If run_once_per_session and already succeeded, skip.
-	if step.RunOncePerSession && state.Status == StatusSuccess {
+	// If run_once and already succeeded, skip.
+	if step.RunOnce && state.Status == StatusSuccess {
 		return false
 	}
 
-	// If run_once_per_session and already skipped, skip.
-	if step.RunOncePerSession && state.Status == StatusSkipped {
+	// If run_once and already skipped, skip.
+	if step.RunOnce && state.Status == StatusSkipped {
 		return false
 	}
 

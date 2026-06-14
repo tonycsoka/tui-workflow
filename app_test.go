@@ -785,22 +785,22 @@ func TestSuccessfulStepCanBeRerun(t *testing.T) {
 	}
 }
 
-func TestRunOncePerSessionStillBlocksRerun(t *testing.T) {
+func TestRunOnceStillBlocksRerun(t *testing.T) {
 	wf := Workflow{
 		Name: "test",
 		Steps: []StepOrGroup{
-			{Step: &Step{ID: "s1", Name: "Step 1", Script: "foo.sh", RunOncePerSession: true}},
+			{Step: &Step{ID: "s1", Name: "Step 1", Script: "foo.sh", RunOnce: true}},
 			{Step: &Step{ID: "s2", Name: "Step 2", Script: "bar.sh"}},
 		},
 	}
 	sess := NewSession(&wf, ".")
 
-	// Complete step 0 with run_once_per_session
+	// Complete step 0 with run_once
 	sess.UpdateStepState("s1", StepState{Status: StatusSuccess})
 
-	// Step 0 should NOT be runnable again because run_once_per_session is set
+	// Step 0 should NOT be runnable again because run_once is set
 	if sess.IsStepRunnable(&wf, 0) {
-		t.Error("Step 0 should not be runnable again with run_once_per_session")
+		t.Error("Step 0 should not be runnable again with run_once")
 	}
 
 	// Step 1 should be runnable

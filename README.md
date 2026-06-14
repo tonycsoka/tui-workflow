@@ -105,7 +105,7 @@ A comprehensive demo showing all features:
       "name": "Build",
       "script": "scripts/build.sh",
       "params": ["env"],
-      "run_once_per_session": false,
+      "run_once": false,
       "description": "Build the application"
     },
     {
@@ -113,7 +113,7 @@ A comprehensive demo showing all features:
       "name": "Deploy",
       "script": "scripts/deploy.sh",
       "params": ["env"],
-      "run_once_per_session": true,
+      "run_once": true,
       "description": "Deploy the application"
     }
   ]
@@ -134,7 +134,7 @@ A comprehensive demo showing all features:
     - `name`: Display name.
     - `script`: Path to shell script (relative to workflow JSON or absolute).
     - `params`: Array of parameter names to pass as positional arguments to the script.
-    - `run_once_per_session`: If `true`, the step is skipped if it already succeeded in the current session.
+    - `run_once`: If `true`, the step is skipped if it already succeeded in the current session. Defaults to `false`.
     - `auto_run`: If `true`, the step is automatically executed as part of an auto-run chain triggered by pressing `R`.
     - `output_type`: Set to `"markdown"` to render the step's stdout as styled markdown.
     - `description`: Description shown in the step info pane.

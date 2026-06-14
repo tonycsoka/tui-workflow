@@ -35,7 +35,7 @@ type Step struct {
 	Name              string     `json:"name"`
 	Script            string     `json:"script"`
 	Params            []string   `json:"params,omitempty"`
-	RunOncePerSession bool       `json:"run_once_per_session,omitempty"`
+	RunOnce bool       `json:"run_once,omitempty"`
 	AutoRun           bool       `json:"auto_run,omitempty"`
 	Description       string     `json:"description,omitempty"`
 	OutputType        OutputType `json:"output_type,omitempty"`

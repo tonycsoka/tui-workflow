@@ -76,10 +76,10 @@ The step list renders a **selectable group header line** (e.g., `╭─ Parallel
 - **Press `d` to skip**: When on a group header, skips all remaining pending/failed steps in the group. When on an individual step, marks that specific step as `skipped`. If all steps in a group are skipped, the group completes and downstream unlocks.
 - **Press `R` (auto-run)**: If the cursor is on a group header, all eligible steps in the group are started simultaneously and auto-run waits for the group to finish before advancing. If the cursor is on an individual step, it behaves like `r` on that step (starts it individually) and does not chain to the next workflow item — auto-run is only meaningful from a group header or sequential step.
 
-### 5. `run_once_per_session` and `auto_run` within groups
+### 5. `run_once` and `auto_run` within groups
 
 These behave exactly as they do today, scoped to the individual step:
-- A `run_once_per_session` step that is already `success` in the current session is skipped automatically when the group is started. The rest of the group still runs.
+- A `run_once` step that is already `success` in the current session is skipped automatically when the group is started. The rest of the group still runs.
 - `auto_run` steps within a group start automatically when the group is unlocked (either by the user pressing `R` or by advancing the auto-run chain).
 
 ## Proposed Approach
@@ -146,4 +146,4 @@ These behave exactly as they do today, scoped to the individual step:
   - If one group member fails, downstream is blocked
   - Group header renders; cursor skips headers
   - Auto-run starts all eligible group steps at once
-  - `run_once_per_session` steps skip correctly inside a group
+  - `run_once` steps skip correctly inside a group

@@ -791,7 +791,7 @@ func (m model) renderStepListContent(w int) string {
 				style = stepSkippedStyle
 				statusText = "skipped"
 			}
-			if step.RunOncePerSession && state.Status == StatusSuccess {
+			if step.RunOnce && state.Status == StatusSuccess {
 				style = stepSuccessRunOnceStyle
 			}
 
@@ -853,7 +853,7 @@ func (m model) renderStepInfo(w int) string {
 		lastRun = state.RunAt
 	}
 	stepType := "Repeatable"
-	if step.RunOncePerSession {
+	if step.RunOnce {
 		stepType = "Single run"
 	}
 	if step.AutoRun {
@@ -889,7 +889,7 @@ func (m model) runTypeIcon(step Step) string {
 	if step.AutoRun {
 		return "⏵"
 	}
-	if step.RunOncePerSession {
+	if step.RunOnce {
 		return "⊘"
 	}
 	return "↻"
