@@ -18,7 +18,7 @@
           "id": "unit",
           "name": "Unit Tests",
           "script": "scripts/unit.sh",
-          "run_once_per_session": true,
+          "run_once": true,
           "description": "Run unit tests"
         },
         {

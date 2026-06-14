@@ -17,7 +17,7 @@
       "name": "Hello World",
       "script": "scripts/hello.sh",
       "description": "A simple greeting with text output",
-      "run_once_per_session": false
+      "run_once": false
     },
     {
       "id": "report",
@@ -25,7 +25,7 @@
       "script": "scripts/report.sh",
       "output_type": "markdown",
       "description": "Produces markdown output with tables and formatting",
-      "run_once_per_session": true,
+      "run_once": true,
       "auto_run": true
     },
     {
@@ -33,7 +33,7 @@
       "name": "Warning Check",
       "script": "scripts/warning.sh",
       "description": "Produces stderr output and a non-zero exit code",
-      "run_once_per_session": false
+      "run_once": false
     },
     {
       "id": "deploy",
@@ -44,7 +44,7 @@
         "verbose"
       ],
       "description": "Uses parameters and depends on previous steps",
-      "run_once_per_session": true,
+      "run_once": true,
       "auto_run": true
     },
     {
@@ -52,7 +52,7 @@
       "name": "Cleanup",
       "script": "scripts/cleanup.sh",
       "description": "Final cleanup step, repeatable",
-      "run_once_per_session": false
+      "run_once": false
     }
   ]
 }

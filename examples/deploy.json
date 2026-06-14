@@ -22,7 +22,7 @@
         "env",
         "version"
       ],
-      "run_once_per_session": true,
+      "run_once": true,
       "description": "Build the application"
     },
     {
@@ -33,7 +33,7 @@
         "env",
         "version"
       ],
-      "run_once_per_session": true,
+      "run_once": true,
       "description": "Deploy the application"
     }
   ]
