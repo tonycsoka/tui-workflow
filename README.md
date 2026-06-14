@@ -20,6 +20,34 @@ A JSON-driven terminal UI for running sequenced, parameterised shell workflows.
 
 ## Installation
 
+### Pre-built binaries
+
+Download the latest release for your platform from the [Releases](https://github.com/tonycsoka/curre/releases) page, or use the commands below:
+
+**Linux (amd64)**
+```bash
+curl -sL https://github.com/tonycsoka/curre/releases/latest/download/curre-linux-amd64.tar.gz | tar xz
+sudo mv curre-linux-amd64 /usr/local/bin/curre
+```
+
+**Linux (arm64)**
+```bash
+curl -sL https://github.com/tonycsoka/curre/releases/latest/download/curre-linux-arm64.tar.gz | tar xz
+sudo mv curre-linux-arm64 /usr/local/bin/curre
+```
+
+**macOS (Intel)**
+```bash
+curl -sL https://github.com/tonycsoka/curre/releases/latest/download/curre-darwin-amd64.tar.gz | tar xz
+sudo mv curre-darwin-amd64 /usr/local/bin/curre
+```
+
+**macOS (Apple Silicon)**
+```bash
+curl -sL https://github.com/tonycsoka/curre/releases/latest/download/curre-darwin-arm64.tar.gz | tar xz
+sudo mv curre-darwin-arm64 /usr/local/bin/curre
+```
+
 ### From GitHub (latest)
 
 ```bash
