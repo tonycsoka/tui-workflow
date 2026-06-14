@@ -18,9 +18,10 @@ var (
 	// Step state styles (no padding here — leftPaneStyle handles it)
 	stepPendingStyle = lipgloss.NewStyle()
 	stepRunningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Bold(true)
-	stepSuccessStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	stepFailedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	stepSkippedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Strikethrough(true)
+	stepSuccessStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	stepSuccessRunOnceStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("28"))
+	stepFailedStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	stepSkippedStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 
 	// Pane styles
 	leftPaneStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder())
@@ -84,14 +85,14 @@ const (
 	leftPaneMinWidth   = 15
 	rightPaneMinWidth  = 10
 	stepsPaneMinHeight = 3
-	infoPaneHeight     = 2
+	infoPaneHeight     = 4
 	paramBlockHeight   = 3 // label + input + spacing
 	modalMaxWidth      = 60
 
 	titleBarHeight = 1
 	footerHeight   = 1
 	cursorBgColor  = "236"
-	lastRunFgColor = "244"
+	metaFgColor    = "244"
 )
 
 // liveOutput holds the raw stdout/stderr for a step that is currently running.
@@ -790,6 +791,9 @@ func (m model) renderStepListContent(w int) string {
 				style = stepSkippedStyle
 				statusText = "skipped"
 			}
+			if step.RunOncePerSession && state.Status == StatusSuccess {
+				style = stepSuccessRunOnceStyle
+			}
 
 			prefix := "  "
 			if flat.GroupID != "" {
@@ -828,7 +832,11 @@ func (m model) renderStepInfo(w int) string {
 		if desc == "" {
 			desc = "(no description)"
 		}
-		return lipgloss.NewStyle().Render(desc)
+		status := m.session.ItemStatus(item)
+		statusText := string(status)
+		icon := m.statusIcon(status)
+		metaStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(metaFgColor))
+		return lipgloss.NewStyle().Render(desc) + "\n" + metaStyle.Render(fmt.Sprintf("Status: %s %s", icon, statusText))
 	}
 	if dl.stepIndex < 0 || dl.stepIndex >= len(m.workflow.FlatSteps()) {
 		return ""
@@ -844,10 +852,21 @@ func (m model) renderStepInfo(w int) string {
 	if state.RunAt != "" {
 		lastRun = state.RunAt
 	}
+	stepType := "Repeatable"
+	if step.RunOncePerSession {
+		stepType = "Single run"
+	}
+	if step.AutoRun {
+		stepType += " - auto"
+	}
+	icon := m.statusIcon(state.Status)
+	metaStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(metaFgColor))
 
 	descLine := lipgloss.NewStyle().Render(desc)
-	runLine := lipgloss.NewStyle().Foreground(lipgloss.Color(lastRunFgColor)).Render("Last run: " + lastRun)
-	return descLine + "\n" + runLine
+	typeLine := metaStyle.Render(fmt.Sprintf("Type: %s", stepType))
+	statusLine := metaStyle.Render(fmt.Sprintf("Status: %s %s", icon, string(state.Status)))
+	runLine := metaStyle.Render(fmt.Sprintf("Run at: %s", lastRun))
+	return descLine + "\n" + typeLine + "\n" + statusLine + "\n" + runLine
 }
 
 func (m model) statusIcon(status StepStatus) string {
