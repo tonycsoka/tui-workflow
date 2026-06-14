@@ -4,8 +4,7 @@ A JSON-driven terminal UI for running sequenced, parameterised shell workflows.
 
 > ⚠️ **Security Warning**: `curre` executes arbitrary shell scripts with your full user privileges. Only run workflow files from trusted sources.
 
-> 📝 **About the name**
-> *Curre* — Latin for **"Run!"**[^1]
+> **curre** /ˈkʊreɪ/ — Latin imperative of *currere*: "Run!"[^1]
 
 ## Features
 
