@@ -253,6 +253,10 @@ Parallel groups are shown with a group header that displays the group name and a
 go test -v
 ```
 
+## AI Disclosure
+
+Parts of this project were written or assisted by AI tools (e.g., GitHub Copilot, Claude, etc.).
+
 ## License
 
 MIT
